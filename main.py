@@ -1,8 +1,9 @@
 import os
 from sys import exit
 
-import pygame
 from pygame.transform import scale
+
+from file_import import *
 
 
 def load_image(path, color_key=None):
@@ -82,6 +83,10 @@ class Group:
                 collision |= COLLIDE_DOWN
             else:
                 collision |= COLLIDE_UP
+        if not y11 + h1 * 2 / 3 > y22:
+            collision |= COLLIDE_HOOK_UP
+        if not y11 + h1 / 3 < y21:
+            collision |= COLLIDE_HOOK_DOWN
         return collision
 
 
@@ -127,10 +132,10 @@ class SimpleAnimSprite(ImageSprite):
         self.reverse_wait_i = 0
 
     def update(self):
-        if self.reverse_wait_i != 0:
-            self.reverse_wait_i = max(0.0, self.reverse_wait_i - dt)
+        if self.reverse_wait_i > 0:
+            self.reverse_wait_i -= dt
             return
-        if self.reverse_wait_i == 0:
+        if self.reverse_wait_i <= 0:
             self.anim_wait_i += dt
             if self.anim_wait_i >= self.anim_wait:
                 self.anim_wait_i -= self.anim_wait
@@ -169,49 +174,118 @@ class PlayerSprite(ImageSprite):
         self.y = self.rect.y
         self.vx = 0
         self.vy = 0
-        self.jumps = 1
-        self.jump_timeout = 0
+        self.keys = {}
+        self.collisions = 0
+
+        self.jump_can = True
+        self.jump_pressed_timeout = 0
+        self.jump_ground_timeout = 0
+        self.jump_mercy = 0
+        self.hooked = False
+        self.hook_right = True
 
     def update(self):
+        self.collisions = group_walls.smart_collide(self.rect)
+        self.keys = pygame.key.get_pressed()
+
         # timeout
-        if self.jump_timeout != 0:
-            self.jump_timeout = max(0.0, self.jump_timeout - dt)
+        if self.jump_ground_timeout > 0:
+            self.jump_ground_timeout -= dt
+        if self.jump_pressed_timeout > 0:
+            self.jump_pressed_timeout -= dt
 
         # check pressed keys
-        keys = pygame.key.get_pressed()
-        if keys[pygame.K_RIGHT]:
-            self.vx = min(max_move, self.vx + move_force * dt)
-        if keys[pygame.K_LEFT]:
-            self.vx = max(-max_move, self.vx - move_force * dt)
+        if self.keys[KEY_JUMP] and self.jump_pressed_timeout > 0:
+            self.vy += jump_pressed_force * dt
+        else:
+            self.jump_pressed_timeout = 0
 
-        # resist
-        if not (keys[pygame.K_RIGHT] or keys[pygame.K_LEFT]):
-            if self.vx > 0:
-                self.vx = max(0.0, self.vx - move_force * dt)
+        # mercy
+        if self.jump_mercy > 0:
+            if self.jump():
+                self.jump_mercy = 0
             else:
-                self.vx = min(0.0, self.vx + move_force * dt)
+                self.jump_mercy -= dt
+
+        self.check_hook()
+
+        if not self.hooked:
+            if self.keys[KEY_RIGHT]:
+                self.vx = min(max_move, self.vx + move_force * dt)
+            elif self.keys[KEY_LEFT]:
+                self.vx = max(-max_move, self.vx - move_force * dt)
+            else:  # resist
+                if self.vx > 0:
+                    self.vx = max(0.0, self.vx - move_force * dt)
+                else:
+                    self.vx = min(0.0, self.vx + move_force * dt)
+
+        if not (self.hooked or self.collisions & COLLIDE_DOWN):
+            self.vy -= gravity * dt
+            if self.vy < -max_gravity:
+                self.vy = -max_gravity
+            self.jump_can = False
 
         self.move()
 
         if group_spikes.collide(self.rect):
             self.set_pos(*player_start_pos)
 
+    def collide_all(self, *args):
+        for arg in args:
+            if not self.collisions & arg:
+                return False
+        return True
+
+    def check_hook(self):
+        # check if you out of available space
+        if self.hooked:
+            if self.hook_right:
+                if not self.collisions & COLLIDE_RIGHT:
+                    self.hooked = False
+            else:
+                if not self.collisions & COLLIDE_LEFT:
+                    self.hooked = False
+            if not self.collide_all(COLLIDE_HOOK_DOWN, COLLIDE_HOOK_UP):
+                self.hooked = False
+                if not self.vy < 0:
+                    self.vy = 260
+                    # TODO
+
+        if self.keys[KEY_HOOK] != self.hooked:
+            if self.hooked:
+                # if you up hook key
+                self.hooked = False
+            else:
+                # if you try to hook
+                if self.collisions & (COLLIDE_LEFT | COLLIDE_RIGHT):
+                    if self.collide_all(COLLIDE_HOOK_DOWN, COLLIDE_HOOK_UP):
+                        self.hooked = True
+                        self.vy = 0
+                        self.hook_right = self.collisions & COLLIDE_RIGHT
+
+        # y move
+        if self.hooked:
+            if self.keys[KEY_UP]:
+                self.vy = hook_move_force
+            elif self.keys[KEY_DOWN]:
+                self.vy = -hook_move_force
+            else:
+                self.vy = 0
+
     def move(self):
-        collide = group_walls.smart_collide(self.rect)
-        if collide & COLLIDE_UP:
+        if self.collisions & COLLIDE_UP:
             if self.vy > 0:
                 self.vy = 0
-        if collide & COLLIDE_DOWN:
-            self.jumps = 1
+        if self.collisions & COLLIDE_DOWN:
+            self.jump_can = True
             if self.vy < 0:
                 self.vy = 0
-        else:
-            self.vy += gravity * dt
-            self.jumps = 0
-        if collide & COLLIDE_RIGHT:
+                self.jump_ground_timeout = jump_ground_timeout
+        if self.collisions & COLLIDE_RIGHT:
             if self.vx > 0:
                 self.vx = 0
-        if collide & COLLIDE_LEFT:
+        if self.collisions & COLLIDE_LEFT:
             if self.vx < 0:
                 self.vx = 0
         self.x += self.vx * dt
@@ -220,10 +294,15 @@ class PlayerSprite(ImageSprite):
         self.rect.y = self.y
 
     def jump(self):
-        if self.jumps > 0 and self.jump_timeout == 0:
-            self.jump_timeout = jump_timeout
-            self.jumps -= 1
+        if self.jump_can and self.jump_ground_timeout <= 0:
+            self.jump_can = False
+            self.jump_pressed_timeout = jump_pressed_timeout
             self.vy = jump_force
+            return True
+        else:
+            if self.jump_mercy <= 0:
+                self.jump_mercy = jump_mercy
+            return False
 
     def set_pos(self, x, y):
         self.x = x
@@ -294,7 +373,7 @@ class GameScene:
                 terminate()
             elif event.type == pygame.KEYDOWN:
                 key = event.key
-                if key in [pygame.K_SPACE]:
+                if key == KEY_JUMP:
                     player.jump()
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == pygame.BUTTON_LEFT:
@@ -310,12 +389,23 @@ def create_rectangle(color=(0,) * 3):
 
 
 def camera_move():
+    max_camera_dist = 50
     global camera_x, camera_y
     dx = player.x - camera_x
     dy = player.y - camera_y
     k = 30
     camera_x += dx / k
     camera_y += dy / k
+    dx = player.x - camera_x
+    dy = player.y - camera_y
+    if dx > max_camera_dist:
+        camera_x += dx - max_camera_dist
+    elif dx < -max_camera_dist:
+        camera_x += dx + max_camera_dist
+    if dy > max_camera_dist:
+        camera_y += dy - max_camera_dist
+    elif dy < -max_camera_dist:
+        camera_y += dy + max_camera_dist
 
 
 def terminate():
@@ -336,6 +426,8 @@ clock = pygame.time.Clock()
 # --------------------------------------------- #
 # init special consts
 
+COLLIDE_HOOK_UP = 32
+COLLIDE_HOOK_DOWN = 16
 COLLIDE_UP = 8
 COLLIDE_DOWN = 4
 COLLIDE_RIGHT = 2
@@ -350,13 +442,19 @@ fps = 60
 fps_tick = 3
 dt = round(1 / fps / fps_tick, 3)
 
-gravity = -981
+gravity = 1000
+max_gravity = 600
 
-jump_force = 400.0
-jump_timeout = 0.2
+jump_force = 300
+jump_pressed_timeout = 0.3
+jump_pressed_force = gravity / 2
+jump_ground_timeout = 0.05
+jump_mercy = 0.3
 
 max_move = 200.0
 move_force = max_move * 12
+
+hook_move_force = 100
 
 # --------------------------------------------- #
 # init sprites values
@@ -366,7 +464,7 @@ group_walls = Group()
 group_spikes = Group()
 
 tile_w = 32
-tile_s = (tile_w, ) * 2
+tile_s = (tile_w,) * 2
 
 spikes_i = 4
 spike_sizes = [
@@ -380,7 +478,7 @@ spike_anims = [scale(load_image(f"spikes/spike_{i}.png"), tile_s) for i in range
 # --------------------------------------------- #
 # init sprites
 
-player_size = (30, 60)
+player_size = (30, 30 / 7 * 9)
 player_start_pos = (0, 100)
 player = PlayerSprite()
 player.set_pos(*player_start_pos)
