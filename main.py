@@ -25,10 +25,17 @@ class Group:
     def __init__(self):
         self.sprites = []
 
+    def clear(self):
+        self.sprites = []
+
     def add(self, sprite):
         if not isinstance(sprite, ImageSprite):
             raise Exception("not sprite: " + sprite)
         self.sprites.append(sprite)
+
+    def add_all(self, sprites):
+        for sprite in sprites:
+            self.add(sprite)
 
     def update(self):
         for sprite in self.sprites:
@@ -37,8 +44,8 @@ class Group:
     def draw(self):
         for sprite in self.sprites:
             rect = sprite.rect.copy()
-            rect.x -= camera_x - (width - player_size[0]) / 2
-            rect.y -= camera_y - (height - player_size[1]) / 2
+            rect.x -= camera_x
+            rect.y -= camera_y
             rect.y = height - rect.y - sprite.static_height
             screen.blit(sprite.image, rect)
 
@@ -91,9 +98,9 @@ class Group:
 
 
 class ImageSprite(pygame.sprite.Sprite):
-    def __init__(self, image):
+    def __init__(self, scene, image):
         super().__init__()
-        group_all.add(self)
+        scene.group_all.add(self)
         self.image = image
         self.rect = image.get_rect()
         self.static_height = self.rect.height
@@ -112,8 +119,8 @@ class ImageSprite(pygame.sprite.Sprite):
 
 
 class SimpleAnimSprite(ImageSprite):
-    def __init__(self, images, rects=None):
-        super().__init__(images[0])
+    def __init__(self, scene, images, rects=None):
+        super().__init__(scene, images[0])
         self.anims_rects = None
         if isinstance(rects, tuple):
             self.anims_rects = None
@@ -162,14 +169,16 @@ class SimpleAnimSprite(ImageSprite):
 
 
 class ButtonSprite(ImageSprite):
-    def __init__(self, code, image):
-        super().__init__(image)
+    def __init__(self, scene, code, image):
+        super().__init__(scene, image)
+        scene.group_buttons.add(self)
         self.code = code
 
 
 class PlayerSprite(ImageSprite):
-    def __init__(self):
-        super().__init__(scale(load_image("player.png"), player_size))
+    def __init__(self, scene):
+        super().__init__(scene, scale(load_image("player.png"), player_size))
+        self.scene = scene
         self.x = self.rect.x
         self.y = self.rect.y
         self.vx = 0
@@ -185,7 +194,7 @@ class PlayerSprite(ImageSprite):
         self.hook_right = True
 
     def update(self):
-        self.collisions = group_walls.smart_collide(self.rect)
+        self.collisions = self.scene.group_walls.smart_collide(self.rect)
         self.keys = pygame.key.get_pressed()
 
         # timeout
@@ -228,12 +237,12 @@ class PlayerSprite(ImageSprite):
 
         self.move()
 
-        if group_spikes.collide(self.rect):
-            self.set_pos(*player_start_pos)
+        if self.scene.group_spikes.collide(self.rect):
+            self.set_pos(*self.scene.player_start_pos)
 
-    def collide_all(self, *args):
-        for arg in args:
-            if not self.collisions & arg:
+    def collision_all(self, *collides):
+        for collide in collides:
+            if not self.collisions & collide:
                 return False
         return True
 
@@ -246,11 +255,10 @@ class PlayerSprite(ImageSprite):
             else:
                 if not self.collisions & COLLIDE_LEFT:
                     self.hooked = False
-            if not self.collide_all(COLLIDE_HOOK_DOWN, COLLIDE_HOOK_UP):
+            if not self.collision_all(COLLIDE_HOOK_DOWN, COLLIDE_HOOK_UP):
                 self.hooked = False
                 if not self.vy < 0:
                     self.vy = 260
-                    # TODO
 
         if self.keys[KEY_HOOK] != self.hooked:
             if self.hooked:
@@ -259,7 +267,7 @@ class PlayerSprite(ImageSprite):
             else:
                 # if you try to hook
                 if self.collisions & (COLLIDE_LEFT | COLLIDE_RIGHT):
-                    if self.collide_all(COLLIDE_HOOK_DOWN, COLLIDE_HOOK_UP):
+                    if self.collision_all(COLLIDE_HOOK_DOWN, COLLIDE_HOOK_UP):
                         self.hooked = True
                         self.vy = 0
                         self.hook_right = self.collisions & COLLIDE_RIGHT
@@ -310,15 +318,15 @@ class PlayerSprite(ImageSprite):
 
 
 class SpikeSprite(SimpleAnimSprite):
-    def __init__(self):
-        super().__init__(spike_anims, spike_sizes)
-        group_spikes.add(self)
+    def __init__(self, scene):
+        super().__init__(scene, spike_anims, spike_sizes)
+        scene.group_spikes.add(self)
 
 
 class WallSprite(ImageSprite):
-    def __init__(self, *size):
-        super().__init__(scale(create_rectangle(), size))
-        group_walls.add(self)
+    def __init__(self, scene, *size):
+        super().__init__(scene, scale(create_rectangle(), size))
+        scene.group_walls.add(self)
 
 
 class StartScene:
@@ -326,45 +334,95 @@ class StartScene:
         self.group_all = Group()
         self.group_buttons = Group()
 
-    def tick(self):
-        clock.tick(fps)
+        self.running = True
 
+        self.game_name = pygame.font.SysFont('Comic Sans MS', 60).render("My amazing game", True, (0, 0, 0))
+
+        bk = load_image("start_background.png")
+        k = bk.get_width() / bk.get_height()
+        self.background = scale(bk, (height * k, height))
+
+        self.create_button("play", (350, 310))
+        self.create_button("exit", (450, 310))
+        self.create_button("settings", (550, 310))
+
+    def create_button(self, code, pos):
+        button = ButtonSprite(self, code, scale(load_image(f"buttons/button_{code}.png"), button_size))
+        button.set_pos(*pos)
+
+    def loop(self):
+        while self.running:
+            self.tick()
+
+    def tick(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 terminate()
-            elif event.type == pygame.MOUSEBUTTONDOWN:
+            elif event.type == pygame.MOUSEBUTTONUP:
                 x, y = event.pos
+                y = height - y
                 for button in self.group_buttons.sprites:
                     if button.rect.collidepoint(x, y):
                         self.button_click(button.code)
                         break
 
-        group_all.update()
+        self.group_all.update()
 
-        screen.fill((100,) * 3)
-        group_all.draw()
+        screen.blit(self.background, (0, 0))
+        screen.blit(self.game_name, (100, 50))
+
+        self.group_all.draw()
         pygame.display.flip()
+        clock.tick(fps)
 
     def button_click(self, code):
-        pass
+        if code == "play":
+            self.running = False
+        elif code == "exit":
+            terminate()
+        elif code == "settings":
+            SettingScene().loop()
 
 
 class GameScene:
     def __init__(self):
+        self.group_all = Group()
+        self.group_walls = Group()
+        self.group_spikes = Group()
+
         self.fps_i = 0
+
+        self.player_start_pos = (0, 100)
+        self.player = None
+
+        self.player = PlayerSprite(self)
+        self.player.set_pos(*self.player_start_pos)
+
+        wall1 = WallSprite(self, 1000, 20)
+        wall1.set_pos(-500, 0)
+
+        wall2 = WallSprite(self, 20, 100)
+        wall2.set_pos(100, 100)
+
+        spike = SpikeSprite(self)
+        spike.set_pos(-100, 0)
+
+    def loop(self):
+        while True:
+            self.tick()
 
     def tick(self):
         clock.tick(fps * fps_tick)
 
         self.events()
 
-        group_all.update()
-        camera_move()
+        self.group_all.update()
+        self.camera_move()
 
         self.fps_i = (self.fps_i + 1) % fps_tick
         if self.fps_i == 0:
             screen.fill((100,) * 3)
-            group_all.draw()
+            self.group_all.draw()
             pygame.display.flip()
 
     def events(self):
@@ -374,38 +432,89 @@ class GameScene:
             elif event.type == pygame.KEYDOWN:
                 key = event.key
                 if key == KEY_JUMP:
-                    player.jump()
+                    self.player.jump()
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == pygame.BUTTON_LEFT:
                     x, y = event.pos
-                    player.x += x - width / 2
-                    player.y -= y - height / 2
+                    y = height - y
+                    self.player.x += x - width / 2
+                    self.player.y += y - height / 2
+
+    def camera_move(self):
+        max_camera_dist = 50
+        global camera_x, camera_y
+        player_x = self.player.x - (width - player_size[0]) / 2
+        player_y = self.player.y - (height - player_size[1]) / 2
+
+        dx = player_x - camera_x
+        dy = player_y - camera_y
+        k = 30
+        camera_x += dx / k
+        camera_y += dy / k
+
+        dx = player_x - camera_x
+        dy = player_y - camera_y
+        if dx > max_camera_dist:
+            camera_x += dx - max_camera_dist
+        elif dx < -max_camera_dist:
+            camera_x += dx + max_camera_dist
+        if dy > max_camera_dist:
+            camera_y += dy - max_camera_dist
+        elif dy < -max_camera_dist:
+            camera_y += dy + max_camera_dist
+
+
+class MenuScene:
+    pass
+
+
+class SettingScene:
+    def __init__(self):
+        self.background_scene = screen.copy()
+        self.fade = pygame.Surface((width, height))
+        self.fade.set_alpha(200)
+
+        self.running = True
+
+        self.group_all = Group()
+        self.group_buttons = Group()
+
+    def loop(self):
+        while self.running:
+            self.tick()
+
+    def tick(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                terminate()
+            elif event.type == pygame.MOUSEBUTTONUP:
+                x, y = event.pos
+                y = height - y
+                for button in self.group_buttons.sprites:
+                    if button.rect.collidepoint(x, y):
+                        self.button_click(button.code)
+                        break
+
+        self.group_all.update()
+
+        screen.blit(self.background_scene, (0, 0))
+        screen.blit(self.fade, (0, 0))
+
+        self.group_all.draw()
+        pygame.display.flip()
+        clock.tick(fps)
+
+    def button_click(self, code):
+        if code == "continue":
+            self.running = False
+        elif code == "exit":
+            terminate()
 
 
 def create_rectangle(color=(0,) * 3):
     image = pygame.Surface((1, 1))
     image.fill(color)
     return image
-
-
-def camera_move():
-    max_camera_dist = 50
-    global camera_x, camera_y
-    dx = player.x - camera_x
-    dy = player.y - camera_y
-    k = 30
-    camera_x += dx / k
-    camera_y += dy / k
-    dx = player.x - camera_x
-    dy = player.y - camera_y
-    if dx > max_camera_dist:
-        camera_x += dx - max_camera_dist
-    elif dx < -max_camera_dist:
-        camera_x += dx + max_camera_dist
-    if dy > max_camera_dist:
-        camera_y += dy - max_camera_dist
-    elif dy < -max_camera_dist:
-        camera_y += dy + max_camera_dist
 
 
 def terminate():
@@ -418,9 +527,10 @@ def terminate():
 
 pygame.init()
 pygame.display.set_caption("God of Sky")
+pygame.font.init()
 
 size = width, height = 1400, 700
-screen = pygame.display.set_mode(size, pygame.RESIZABLE)
+screen = pygame.display.set_mode(size)
 clock = pygame.time.Clock()
 
 # --------------------------------------------- #
@@ -459,9 +569,9 @@ hook_move_force = 100
 # --------------------------------------------- #
 # init sprites values
 
-group_all = Group()
-group_walls = Group()
-group_spikes = Group()
+player_size = (30, 30 / 7 * 9)
+
+button_size = (64, ) * 2
 
 tile_w = 32
 tile_s = (tile_w,) * 2
@@ -475,28 +585,11 @@ spike_sizes = [
 ]
 spike_anims = [scale(load_image(f"spikes/spike_{i}.png"), tile_s) for i in range(spikes_i)]
 
-# --------------------------------------------- #
-# init sprites
-
-player_size = (30, 30 / 7 * 9)
-player_start_pos = (0, 100)
-player = PlayerSprite()
-player.set_pos(*player_start_pos)
-
-camera_x, camera_y = player_start_pos
-
-wall1 = WallSprite(1000, 20)
-wall1.set_pos(-500, 0)
-
-wall2 = WallSprite(20, 100)
-wall2.set_pos(100, 100)
-
-spike = SpikeSprite()
-spike.set_pos(-100, 0)
+camera_x, camera_y = 0, 0
 
 # --------------------------------------------- #
-# main loop
+# start game
 
-scene = GameScene()
-while True:
-    scene.tick()
+StartScene().loop()
+
+GameScene().loop()
