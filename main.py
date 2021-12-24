@@ -25,24 +25,24 @@ class Group:
     def __init__(self):
         self.sprites = []
 
-    def clear(self):
-        self.sprites = []
+    def __iter__(self): return self.sprites.__iter__()
 
-    def add(self, sprite):
-        if not isinstance(sprite, ImageSprite):
-            raise Exception("not sprite: " + sprite)
-        self.sprites.append(sprite)
+    def clear(self): self.sprites = []
+
+    def add(self, sprite): self.sprites.append(sprite)
 
     def add_all(self, sprites):
         for sprite in sprites:
             self.add(sprite)
 
+    def remove(self, sprite): self.sprites.remove(sprite)
+
     def update(self):
-        for sprite in self.sprites:
+        for sprite in self:
             sprite.update()
 
     def draw(self):
-        for sprite in self.sprites:
+        for sprite in self:
             rect = sprite.rect.copy()
             rect.x -= camera_x
             rect.y -= camera_y
@@ -51,14 +51,14 @@ class Group:
 
     def collide(self, rect):
         collide_func = rect.colliderect
-        for sprite2 in self.sprites:
+        for sprite2 in self:
             if collide_func(sprite2.rect):
                 return True
         return False
 
     def smart_collide(self, rect):
         collide = 0b0000  # 8-up 4-down 2-right 1-left
-        for sprite in self.sprites:
+        for sprite in self:
             collide |= self._smart_rect_collide(rect, sprite.rect)
         return collide
 
@@ -97,10 +97,14 @@ class Group:
         return collision
 
 
+# --------------------------------------------- #
+# main sprites classes
+
 class ImageSprite(pygame.sprite.Sprite):
     def __init__(self, scene, image):
         super().__init__()
         scene.group_all.add(self)
+        self.scene = scene
         self.image = image
         self.rect = image.get_rect()
         self.static_height = self.rect.height
@@ -116,6 +120,27 @@ class ImageSprite(pygame.sprite.Sprite):
 
     def update_animation(self):
         pass
+
+
+class MovableSprite(ImageSprite):
+    def __init__(self, scene, image):
+        super().__init__(scene, image)
+        self.x = self.rect.x
+        self.y = self.rect.y
+        self.vx = 0
+        self.vy = 0
+
+    def move(self):
+        self.x += self.vx * dt
+        self.y += self.vy * dt
+        self.rect.x = self.x
+        self.rect.y = self.y
+
+    def set_pos(self, x, y):
+        self.x = x
+        self.y = y
+        self.rect.x = x
+        self.rect.y = y
 
 
 class SimpleAnimSprite(ImageSprite):
@@ -168,6 +193,9 @@ class SimpleAnimSprite(ImageSprite):
             self.set_rect(self.anims_rects[self.anim_i])
 
 
+# --------------------------------------------- #
+# not main sprite classes
+
 class ButtonSprite(ImageSprite):
     def __init__(self, scene, code, image):
         super().__init__(scene, image)
@@ -175,14 +203,10 @@ class ButtonSprite(ImageSprite):
         self.code = code
 
 
-class PlayerSprite(ImageSprite):
+class PlayerSprite(MovableSprite):
     def __init__(self, scene):
         super().__init__(scene, scale(load_image("player.png"), player_size))
-        self.scene = scene
-        self.x = self.rect.x
-        self.y = self.rect.y
-        self.vx = 0
-        self.vy = 0
+        self.group_connected_coins = Group()
         self.keys = {}
         self.collisions = 0
 
@@ -218,27 +242,40 @@ class PlayerSprite(ImageSprite):
 
         self.check_hook()
 
+        # right/left move
         if not self.hooked:
             if self.keys[KEY_RIGHT]:
-                self.vx = min(max_move, self.vx + move_force * dt)
+                self.vx = min(self.vx + move_force * dt, max_move)
             elif self.keys[KEY_LEFT]:
-                self.vx = max(-max_move, self.vx - move_force * dt)
+                self.vx = max(self.vx - move_force * dt, -max_move)
             else:  # resist
                 if self.vx > 0:
                     self.vx = max(0.0, self.vx - move_force * dt)
                 else:
                     self.vx = min(0.0, self.vx + move_force * dt)
 
-        if not (self.hooked or self.collisions & COLLIDE_DOWN):
+        # gravity
+        if not self.hooked and not self.collisions & COLLIDE_DOWN:
             self.vy -= gravity * dt
             if self.vy < -max_gravity:
                 self.vy = -max_gravity
             self.jump_can = False
 
+        # collect coins
+        if self.collisions & COLLIDE_DOWN:
+            for coin in self.group_connected_coins:
+                coin.collected()
+                print(2)
+            self.group_connected_coins.clear()
+
+        self.check_move()
         self.move()
 
+        # spikes
         if self.scene.group_spikes.collide(self.rect):
             self.set_pos(*self.scene.player_start_pos)
+            for coin in self.scene.group_coins:
+                coin.player_connect = False
 
     def collision_all(self, *collides):
         for collide in collides:
@@ -281,7 +318,7 @@ class PlayerSprite(ImageSprite):
             else:
                 self.vy = 0
 
-    def move(self):
+    def check_move(self):
         if self.collisions & COLLIDE_UP:
             if self.vy > 0:
                 self.vy = 0
@@ -296,10 +333,6 @@ class PlayerSprite(ImageSprite):
         if self.collisions & COLLIDE_LEFT:
             if self.vx < 0:
                 self.vx = 0
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-        self.rect.x = self.x
-        self.rect.y = self.y
 
     def jump(self):
         if self.jump_can and self.jump_ground_timeout <= 0:
@@ -312,9 +345,38 @@ class PlayerSprite(ImageSprite):
                 self.jump_mercy = jump_mercy
             return False
 
-    def set_pos(self, x, y):
-        self.x = x
-        self.y = y
+
+class CoinSprite(MovableSprite):
+    def __init__(self, scene, pos):
+        super().__init__(scene, coin_image)
+        self.set_pos(*pos)
+        self.position = pos
+        self.scene.group_coins.add(self)
+        self.player_connect = False
+
+        self.min_dist = 30
+        self.k = 1.5
+
+    def update(self):
+        if self.player_connect:
+            dx = self.scene.player.x - self.x
+            self.vx = dx * self.k if abs(dx) > self.min_dist else 0
+
+            dy = self.scene.player.y - self.y
+            self.vy = dy * self.k
+
+            self.move()
+        else:
+            self.set_pos(*self.position)
+            if self.scene.player.rect.colliderect(self.rect):
+                self.player_connect = True
+                self.scene.player.group_connected_coins.add(self)
+
+    def collected(self):
+        self.scene.group_coins.remove(self)
+        self.scene.group_all.remove(self)
+        pass  # save that was collected
+        print(3)
 
 
 class SpikeSprite(SimpleAnimSprite):
@@ -324,10 +386,15 @@ class SpikeSprite(SimpleAnimSprite):
 
 
 class WallSprite(ImageSprite):
-    def __init__(self, scene, *size):
-        super().__init__(scene, scale(create_rectangle(), size))
+    def __init__(self, scene, size):
+        rect = pygame.Surface((1, 1))
+        rect.fill((0,) * 3)
+        super().__init__(scene, scale(rect, size))
         scene.group_walls.add(self)
 
+
+# --------------------------------------------- #
+# scene classes
 
 class StartScene:
     def __init__(self):
@@ -361,7 +428,7 @@ class StartScene:
             elif event.type == pygame.MOUSEBUTTONUP:
                 x, y = event.pos
                 y = height - y
-                for button in self.group_buttons.sprites:
+                for button in self.group_buttons:
                     if button.rect.collidepoint(x, y):
                         self.button_click(button.code)
                         break
@@ -386,26 +453,21 @@ class StartScene:
 
 class GameScene:
     def __init__(self):
+        self.fps_i = 0
+
         self.group_all = Group()
         self.group_walls = Group()
         self.group_spikes = Group()
-
-        self.fps_i = 0
-
-        self.player_start_pos = (0, 100)
-        self.player = None
+        self.group_coins = Group()
 
         self.player = PlayerSprite(self)
+        self.player_start_pos = (0, 100)
         self.player.set_pos(*self.player_start_pos)
 
-        wall1 = WallSprite(self, 1000, 20)
-        wall1.set_pos(-500, 0)
-
-        wall2 = WallSprite(self, 20, 100)
-        wall2.set_pos(100, 100)
-
-        spike = SpikeSprite(self)
-        spike.set_pos(-100, 0)
+        WallSprite(self, (1000, 20)).set_pos(-500, 0)
+        WallSprite(self, (20, 100)).set_pos(100, 100)
+        SpikeSprite(self).set_pos(-100, 0)
+        CoinSprite(self, (200, 100))
 
     def loop(self):
         while True:
@@ -490,7 +552,7 @@ class SettingScene:
             elif event.type == pygame.MOUSEBUTTONUP:
                 x, y = event.pos
                 y = height - y
-                for button in self.group_buttons.sprites:
+                for button in self.group_buttons:
                     if button.rect.collidepoint(x, y):
                         self.button_click(button.code)
                         break
@@ -511,11 +573,8 @@ class SettingScene:
             terminate()
 
 
-def create_rectangle(color=(0,) * 3):
-    image = pygame.Surface((1, 1))
-    image.fill(color)
-    return image
-
+# --------------------------------------------- #
+# close game
 
 def terminate():
     pygame.quit()
@@ -532,6 +591,8 @@ pygame.font.init()
 size = width, height = 1400, 700
 screen = pygame.display.set_mode(size)
 clock = pygame.time.Clock()
+
+camera_x, camera_y = 0, 0
 
 # --------------------------------------------- #
 # init special consts
@@ -561,7 +622,7 @@ jump_pressed_force = gravity / 2
 jump_ground_timeout = 0.05
 jump_mercy = 0.3
 
-max_move = 200.0
+max_move = 200
 move_force = max_move * 12
 
 hook_move_force = 100
@@ -571,7 +632,7 @@ hook_move_force = 100
 
 player_size = (30, 30 / 7 * 9)
 
-button_size = (64, ) * 2
+button_size = (64,) * 2
 
 tile_w = 32
 tile_s = (tile_w,) * 2
@@ -585,7 +646,7 @@ spike_sizes = [
 ]
 spike_anims = [scale(load_image(f"spikes/spike_{i}.png"), tile_s) for i in range(spikes_i)]
 
-camera_x, camera_y = 0, 0
+coin_image = scale(load_image("coin.png"), (25,) * 2)
 
 # --------------------------------------------- #
 # start game
