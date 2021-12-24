@@ -1,6 +1,7 @@
 import os
 from sys import exit
 
+from numpy import sign
 from pygame.transform import scale
 
 from file_import import *
@@ -19,6 +20,15 @@ def load_image(path, color_key=None):
     else:
         image = image.convert_alpha()
     return image
+
+
+def approach(value, mx, step):
+    if abs(value - mx) <= step:
+        return mx
+    if value > mx:
+        return value - step
+    else:
+        return value + step
 
 
 class Group:
@@ -211,65 +221,62 @@ class PlayerSprite(MovableSprite):
         self.collisions = 0
 
         self.jump_can = True
-        self.jump_pressed_timeout = 0
-        self.jump_ground_timeout = 0
+        self.jump_pressed_w = 0
+        self.jump_ground_w = 0
         self.jump_mercy = 0
+
         self.hooked = False
         self.hook_right = True
+
+        self.can_dash = True
+        self.dash_w = 0
 
     def update(self):
         self.collisions = self.scene.group_walls.smart_collide(self.rect)
         self.keys = pygame.key.get_pressed()
 
-        # timeout
-        if self.jump_ground_timeout > 0:
-            self.jump_ground_timeout -= dt
-        if self.jump_pressed_timeout > 0:
-            self.jump_pressed_timeout -= dt
+        # waiting
+        if self.jump_ground_w > 0:
+            self.jump_ground_w = approach(self.jump_ground_w, 0, dt)
+        if self.jump_pressed_w > 0:
+            self.jump_pressed_w = approach(self.jump_pressed_w, 0, dt)
+        if self.dash_w > 0:
+            self.dash_w = approach(self.dash_w, 0, dt)
+            if not self.dash_w > 0:
+                self.vy = dash_end_y_force * sign(self.vy)
 
         # check pressed keys
-        if self.keys[KEY_JUMP] and self.jump_pressed_timeout > 0:
+        if self.keys[KEY_JUMP] and self.jump_pressed_w > 0:
             self.vy += jump_pressed_force * dt
         else:
-            self.jump_pressed_timeout = 0
+            self.jump_pressed_w = 0
 
         # mercy
         if self.jump_mercy > 0:
             if self.jump():
                 self.jump_mercy = 0
             else:
-                self.jump_mercy -= dt
+                self.jump_mercy = approach(self.jump_mercy, 0, dt)
 
         self.check_hook()
+        if not self.hooked and self.dash_w <= 0:
+            # gravity
+            if not self.collisions & COLLIDE_DOWN:
+                self.vy -= gravity * dt
+                if self.vy < -max_gravity:
+                    self.vy = -max_gravity
+                self.jump_can = False
 
-        # right/left move
-        if not self.hooked:
-            if self.keys[KEY_RIGHT]:
-                self.vx = min(self.vx + move_force * dt, max_move)
-            elif self.keys[KEY_LEFT]:
-                self.vx = max(self.vx - move_force * dt, -max_move)
-            else:  # resist
-                if self.vx > 0:
-                    self.vx = max(0.0, self.vx - move_force * dt)
-                else:
-                    self.vx = min(0.0, self.vx + move_force * dt)
+        self.move_x()
 
-        # gravity
-        if not self.hooked and not self.collisions & COLLIDE_DOWN:
-            self.vy -= gravity * dt
-            if self.vy < -max_gravity:
-                self.vy = -max_gravity
-            self.jump_can = False
+        self.check_move()
+        self.move()
 
         # collect coins
         if self.collisions & COLLIDE_DOWN:
             for coin in self.group_connected_coins:
                 coin.collected()
-                print(2)
             self.group_connected_coins.clear()
-
-        self.check_move()
-        self.move()
 
         # spikes
         if self.scene.group_spikes.collide(self.rect):
@@ -282,6 +289,56 @@ class PlayerSprite(MovableSprite):
             if not self.collisions & collide:
                 return False
         return True
+
+    def move_x(self):
+        if self.hooked or self.dash_w > 0:
+            return
+
+        mult = 1 if self.collisions & COLLIDE_DOWN else friction_air
+
+        key_x = 0
+        if self.keys[KEY_RIGHT]:
+            key_x = 1
+        elif self.keys[KEY_LEFT]:
+            key_x = -1
+
+        if abs(self.vx) > max_move and sign(self.vx) == key_x:
+            print(1)
+            # slowdown
+            self.vx = approach(self.vx, max_move * key_x, friction_reduce * mult * dt)
+        else:
+            print(2)
+            # acceleration
+            self.vx = approach(self.vx, max_move * key_x, friction_accel * mult * dt)
+
+    def dash(self):
+        if not self.can_dash:
+            return
+        xd, yd, xf, yf = 0, 0, 0, 0
+
+        if self.keys[KEY_UP]:
+            yd = 1
+        elif self.keys[KEY_DOWN]:
+            yd = -1
+
+        if self.keys[KEY_RIGHT]:
+            xd = 1
+        elif self.keys[KEY_LEFT]:
+            xd = -1
+
+        if xd == yd == 0:
+            return
+
+        if xd == 0:
+            yf = dash_force
+        elif yd == 0:
+            xf = dash_force
+        else:
+            xf, yf = (dash_force / 1.4, ) * 2
+
+        self.dash_w = dash_w
+        self.vx, self.vy = xf * xd, yf * yd
+        self.can_dash = False
 
     def check_hook(self):
         # check if you out of available space
@@ -324,9 +381,10 @@ class PlayerSprite(MovableSprite):
                 self.vy = 0
         if self.collisions & COLLIDE_DOWN:
             self.jump_can = True
+            self.can_dash = True
             if self.vy < 0:
                 self.vy = 0
-                self.jump_ground_timeout = jump_ground_timeout
+                self.jump_ground_w = jump_ground_w
         if self.collisions & COLLIDE_RIGHT:
             if self.vx > 0:
                 self.vx = 0
@@ -335,15 +393,21 @@ class PlayerSprite(MovableSprite):
                 self.vx = 0
 
     def jump(self):
-        if self.jump_can and self.jump_ground_timeout <= 0:
-            self.jump_can = False
-            self.jump_pressed_timeout = jump_pressed_timeout
-            self.vy = jump_force
-            return True
+        if self.jump_can:
+            if self.jump_ground_w == 0:
+                self.jump_can = False
+                self.jump_pressed_w = jump_pressed_w
+                self.vy = jump_force
+                return True
+        elif self.collisions & (COLLIDE_RIGHT | COLLIDE_LEFT):
+            self.hooked = False
+            xd = 1 if self.collisions & COLLIDE_LEFT else -1
+            self.vx = wall_jump_x * xd
+            self.vy = wall_jump_y
         else:
-            if self.jump_mercy <= 0:
+            if self.jump_mercy == 0:
                 self.jump_mercy = jump_mercy
-            return False
+        return False
 
 
 class CoinSprite(MovableSprite):
@@ -355,7 +419,7 @@ class CoinSprite(MovableSprite):
         self.player_connect = False
 
         self.min_dist = 30
-        self.k = 1.5
+        self.k = 2
 
     def update(self):
         if self.player_connect:
@@ -376,7 +440,6 @@ class CoinSprite(MovableSprite):
         self.scene.group_coins.remove(self)
         self.scene.group_all.remove(self)
         pass  # save that was collected
-        print(3)
 
 
 class SpikeSprite(SimpleAnimSprite):
@@ -465,9 +528,12 @@ class GameScene:
         self.player.set_pos(*self.player_start_pos)
 
         WallSprite(self, (1000, 20)).set_pos(-500, 0)
-        WallSprite(self, (20, 100)).set_pos(100, 100)
-        SpikeSprite(self).set_pos(-100, 0)
-        CoinSprite(self, (200, 100))
+        WallSprite(self, (20, 400)).set_pos(-500, 0)
+        WallSprite(self, (20, 400)).set_pos(500, 0)
+        WallSprite(self, (1000, 20)).set_pos(-500, 380)
+        WallSprite(self, (100, 100)).set_pos(100, 100)
+#        SpikeSprite(self).set_pos(-100, 0)
+        CoinSprite(self, (480, 300))
 
     def loop(self):
         while True:
@@ -495,6 +561,8 @@ class GameScene:
                 key = event.key
                 if key == KEY_JUMP:
                     self.player.jump()
+                elif key == KEY_DASH:
+                    self.player.dash()
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == pygame.BUTTON_LEFT:
                     x, y = event.pos
@@ -616,16 +684,27 @@ dt = round(1 / fps / fps_tick, 3)
 gravity = 1000
 max_gravity = 600
 
+friction_air = .65
+friction_accel = 2000
+friction_reduce = 1400
+
 jump_force = 300
-jump_pressed_timeout = 0.3
+jump_pressed_w = 0.3
 jump_pressed_force = gravity / 2
-jump_ground_timeout = 0.05
+jump_ground_w = 0.05
 jump_mercy = 0.3
 
 max_move = 200
 move_force = max_move * 12
 
 hook_move_force = 100
+
+wall_jump_x = 300
+wall_jump_y = 300
+
+dash_force = 700
+dash_end_y_force = 300
+dash_w = 0.12
 
 # --------------------------------------------- #
 # init sprites values

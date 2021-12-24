@@ -23,10 +23,10 @@ default_settings = {
         "right": pygame.K_RIGHT,
         "jump": pygame.K_LSHIFT,
         "hook": pygame.K_z,
+        "dash": pygame.K_x,
     }
 }
 
-# save_data(default_settings, FILE_PATH_SETTING)
 error = False
 try:
     settings = load_data(FILE_PATH_SETTINGS)
@@ -38,6 +38,7 @@ try:
     KEY_RIGHT = st_keys["right"]
     KEY_JUMP = st_keys["jump"]
     KEY_HOOK = st_keys["hook"]
+    KEY_DASH = st_keys["dash"]
 except FileNotFoundError as e:
     error = True
 except json.decoder.JSONDecodeError as e:
