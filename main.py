@@ -2,6 +2,7 @@ import os
 from sys import exit
 
 from numpy import sign
+from random import randint
 from pygame.transform import scale
 
 from file_import import *
@@ -111,13 +112,14 @@ class Group:
 # main sprites classes
 
 class ImageSprite(pygame.sprite.Sprite):
-    def __init__(self, scene, image):
+    def __init__(self, scene, pos, image):
         super().__init__()
         scene.group_all.add(self)
         self.scene = scene
         self.image = image
         self.rect = image.get_rect()
         self.static_height = self.rect.height
+        self.set_pos(*pos)
 
     def set_pos(self, x, y):
         self.rect.x = x
@@ -133,8 +135,8 @@ class ImageSprite(pygame.sprite.Sprite):
 
 
 class MovableSprite(ImageSprite):
-    def __init__(self, scene, image):
-        super().__init__(scene, image)
+    def __init__(self, scene, pos, image):
+        super().__init__(scene, pos, image)
         self.x = self.rect.x
         self.y = self.rect.y
         self.vx = 0
@@ -154,8 +156,8 @@ class MovableSprite(ImageSprite):
 
 
 class SimpleAnimSprite(ImageSprite):
-    def __init__(self, scene, images, rects=None):
-        super().__init__(scene, images[0])
+    def __init__(self, scene, pos, images, rects=None):
+        super().__init__(scene, pos, images[0])
         self.anims_rects = None
         if isinstance(rects, tuple):
             self.anims_rects = None
@@ -204,29 +206,47 @@ class SimpleAnimSprite(ImageSprite):
 
 
 class TriggerSprite(ImageSprite):
-    def __init__(self, scene, size):
+    def __init__(self, scene, pos, size):
         void_image = pygame.Surface(size)
         void_image.fill((0, 0, 0, 0))
-        super().__init__(scene, void_image)
+        super().__init__(scene, pos, void_image)
         self.scene.group_ivisibles.add(self)
 
     def triggered(self):
         pass
 
 
+class ParticleSprite(MovableSprite):
+    def __init__(self, scene, pos, color=(255, 0, 0)):
+        image = pygame.Surface((5, ) * 2)
+        image.fill(color)
+        super().__init__(scene, pos, image)
+        x_max = 400
+        y_max = 400
+        self.vx = randint(-x_max, x_max)
+        self.vy = randint(0, y_max)
+
+    def update(self):
+        if self.y < -1000:
+            self.scene.group_all.remove(self)
+        self.vy -= gravity * dt
+        self.move()
+
+
 # --------------------------------------------- #
 # not main sprite classes
 
 class ButtonSprite(ImageSprite):
-    def __init__(self, scene, code, image):
-        super().__init__(scene, image)
+    def __init__(self, scene, pos, image, code):
+        super().__init__(scene, pos, image)
         scene.group_buttons.add(self)
         self.code = code
 
 
 class PlayerSprite(MovableSprite):
-    def __init__(self, scene):
-        super().__init__(scene, scale(load_image("player.png"), player_size))
+    def __init__(self, scene, pos):
+        super().__init__(scene, pos, scale(load_image("player.png"), player_size))
+        self.start_position = pos
         self.group_connected_coins = Group()
         self.keys = {}
         self.collisions = 0
@@ -291,7 +311,7 @@ class PlayerSprite(MovableSprite):
 
         # spikes
         if self.scene.group_spikes.collide(self.rect):
-            self.set_pos(*self.scene.player_start_pos)
+            self.set_pos(*self.start_position)
             for coin in self.scene.group_coins:
                 coin.player_connect = False
 
@@ -390,7 +410,8 @@ class PlayerSprite(MovableSprite):
                 self.vy = 0
         if self.collisions & COLLIDE_DOWN:
             self.jump_can = True
-            self.can_dash = True
+            if self.dash_w == 0:
+                self.can_dash = True
             if self.vy < 0:
                 self.vy = 0
                 self.jump_ground_w = jump_ground_w
@@ -421,8 +442,7 @@ class PlayerSprite(MovableSprite):
 
 class CoinSprite(MovableSprite):
     def __init__(self, scene, pos):
-        super().__init__(scene, coin_image)
-        self.set_pos(*pos)
+        super().__init__(scene, pos, coin_image)
         self.position = pos
         self.scene.group_coins.add(self)
         self.player_connect = False
@@ -453,17 +473,15 @@ class CoinSprite(MovableSprite):
 
 class SpikeSprite(SimpleAnimSprite):
     def __init__(self, scene, pos):
-        super().__init__(scene, spike_anims, spike_sizes)
-        self.set_pos(*pos)
+        super().__init__(scene, pos, spike_anims, spike_sizes)
         scene.group_spikes.add(self)
 
 
 class WallSprite(ImageSprite):
-    def __init__(self, scene, size, pos):
+    def __init__(self, scene, pos, size):
         rect = pygame.Surface((1, 1))
         rect.fill((0,) * 3)
-        super().__init__(scene, scale(rect, size))
-        self.set_pos(*pos)
+        super().__init__(scene, pos, scale(rect, size))
         scene.group_walls.add(self)
 
 
@@ -472,10 +490,10 @@ class WallSprite(ImageSprite):
 
 class StartScene:
     def __init__(self):
+        self.running = True
+
         self.group_all = Group()
         self.group_buttons = Group()
-
-        self.running = True
 
         self.game_name = pygame.font.SysFont('Comic Sans MS', 60).render("My amazing game", True, (0, 0, 0))
 
@@ -483,13 +501,9 @@ class StartScene:
         k = bk.get_width() / bk.get_height()
         self.background = scale(bk, (height * k, height))
 
-        self.create_button("play", (350, 310))
-        self.create_button("exit", (450, 310))
-        self.create_button("settings", (550, 310))
-
-    def create_button(self, code, pos):
-        button = ButtonSprite(self, code, scale(load_image(f"buttons/button_{code}.png"), button_size))
-        button.set_pos(*pos)
+        create_button(self, (350, 310), "play")
+        create_button(self, (450, 310), "exit")
+        create_button(self, (550, 310), "settings")
 
     def loop(self):
         while self.running:
@@ -534,8 +548,7 @@ class GameScene:
         self.group_spikes = Group()
         self.group_coins = Group()
 
-        self.player = PlayerSprite(self)
-        self.player_start_pos = [0, 0]
+        self.player = None
 
         self.load_level()
 
@@ -548,10 +561,8 @@ class GameScene:
         self.group_spikes.clear()
         self.group_coins.clear()
         self.fps_i = 0
-        self.group_all.add(self.player)
 
-        self.player_start_pos = data["start_pos"]
-        self.player.set_pos(*self.player_start_pos)
+        self.player = PlayerSprite(self, data["start_pos"])
 
         sprite_classes = {
             "wall": WallSprite,
@@ -592,9 +603,9 @@ class GameScene:
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == pygame.BUTTON_LEFT:
                     x, y = event.pos
-                    y = height - y
-                    self.player.x += x - width / 2
-                    self.player.y += y - height / 2
+                    pos = (camera_x + x, camera_y + height - y)
+                    for i in range(20):
+                        ParticleSprite(self, pos, )
 
     def camera_move(self):
         max_camera_dist = 50
@@ -626,14 +637,17 @@ class MenuScene:
 
 class SettingScene:
     def __init__(self):
-        self.background_scene = screen.copy()
-        self.fade = pygame.Surface((width, height))
-        self.fade.set_alpha(200)
-
         self.running = True
 
         self.group_all = Group()
         self.group_buttons = Group()
+
+        self.background_scene = screen.copy()
+        self.fade = pygame.Surface((width, height))
+        self.fade.set_alpha(200)
+
+        create_button(self, (400, 100), "yes")
+        create_button(self, (500, 100), "no")
 
     def loop(self):
         while self.running:
@@ -661,10 +675,15 @@ class SettingScene:
         clock.tick(fps)
 
     def button_click(self, code):
-        if code == "continue":
+        if code == "yes":
+            # save
             self.running = False
-        elif code == "exit":
-            terminate()
+        elif code == "no":
+            self.running = False
+
+
+def create_button(scene, pos, code):
+    ButtonSprite(scene, pos, scale(load_image(f"buttons/button_{code}.png"), button_size), code)
 
 
 # --------------------------------------------- #
@@ -705,7 +724,7 @@ max_collide_pixels = 5
 
 fps = 60
 fps_tick = 3
-dt = round(1 / fps / fps_tick, 3)
+dt = 1 / fps / fps_tick
 
 gravity = 1000
 max_gravity = 600
@@ -718,7 +737,7 @@ jump_force = 300
 jump_pressed_w = 0.3
 jump_pressed_force = gravity / 2
 jump_ground_w = 0.05
-jump_mercy = 0.3
+jump_mercy = 0.5
 
 max_move = 200
 move_force = max_move * 12
@@ -726,7 +745,7 @@ move_force = max_move * 12
 hook_move_force = 100
 
 wall_jump_x = 400
-wall_jump_y = 400
+wall_jump_y = 460
 
 dash_force = 700
 dash_end_y_force = 300
