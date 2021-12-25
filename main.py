@@ -203,6 +203,17 @@ class SimpleAnimSprite(ImageSprite):
             self.set_rect(self.anims_rects[self.anim_i])
 
 
+class TriggerSprite(ImageSprite):
+    def __init__(self, scene, size):
+        void_image = pygame.Surface(size)
+        void_image.fill((0, 0, 0, 0))
+        super().__init__(scene, void_image)
+        self.scene.group_ivisibles.add(self)
+
+    def triggered(self):
+        pass
+
+
 # --------------------------------------------- #
 # not main sprite classes
 
@@ -303,11 +314,9 @@ class PlayerSprite(MovableSprite):
             key_x = -1
 
         if abs(self.vx) > max_move and sign(self.vx) == key_x:
-            print(1)
             # slowdown
             self.vx = approach(self.vx, max_move * key_x, friction_reduce * mult * dt)
         else:
-            print(2)
             # acceleration
             self.vx = approach(self.vx, max_move * key_x, friction_accel * mult * dt)
 
@@ -443,16 +452,18 @@ class CoinSprite(MovableSprite):
 
 
 class SpikeSprite(SimpleAnimSprite):
-    def __init__(self, scene):
+    def __init__(self, scene, pos):
         super().__init__(scene, spike_anims, spike_sizes)
+        self.set_pos(*pos)
         scene.group_spikes.add(self)
 
 
 class WallSprite(ImageSprite):
-    def __init__(self, scene, size):
+    def __init__(self, scene, size, pos):
         rect = pygame.Surface((1, 1))
         rect.fill((0,) * 3)
         super().__init__(scene, scale(rect, size))
+        self.set_pos(*pos)
         scene.group_walls.add(self)
 
 
@@ -524,16 +535,31 @@ class GameScene:
         self.group_coins = Group()
 
         self.player = PlayerSprite(self)
-        self.player_start_pos = (0, 100)
+        self.player_start_pos = [0, 0]
+
+        self.load_level()
+
+    def load_level(self):
+        level_name = "level0"
+        data = load_data("levels/" + level_name + ".json")
+
+        self.group_all.clear()
+        self.group_walls.clear()
+        self.group_spikes.clear()
+        self.group_coins.clear()
+        self.fps_i = 0
+        self.group_all.add(self.player)
+
+        self.player_start_pos = data["start_pos"]
         self.player.set_pos(*self.player_start_pos)
 
-        WallSprite(self, (1000, 20)).set_pos(-500, 0)
-        WallSprite(self, (20, 400)).set_pos(-500, 0)
-        WallSprite(self, (20, 400)).set_pos(500, 0)
-        WallSprite(self, (1000, 20)).set_pos(-500, 380)
-        WallSprite(self, (100, 100)).set_pos(100, 100)
-#        SpikeSprite(self).set_pos(-100, 0)
-        CoinSprite(self, (480, 300))
+        sprite_classes = {
+            "wall": WallSprite,
+            "coin": CoinSprite,
+            "spike": SpikeSprite,
+        }
+        for sprite in data["sprites"]:
+            sprite_classes[sprite[0]](self, *sprite[1:])
 
     def loop(self):
         while True:
@@ -699,8 +725,8 @@ move_force = max_move * 12
 
 hook_move_force = 100
 
-wall_jump_x = 300
-wall_jump_y = 300
+wall_jump_x = 400
+wall_jump_y = 400
 
 dash_force = 700
 dash_end_y_force = 300
