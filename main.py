@@ -374,8 +374,9 @@ class PlayerSprite(MovableSprite):
             xf, yf = (dash_force / 1.4,) * 2
 
         self.dash_w = dash_w
-        self.vx, self.vy = xf * xd, yf * yd
+        self.jump_pressed_w = 0
         self.can_dash = False
+        self.vx, self.vy = xf * xd, yf * yd
 
     def check_hook(self):
         if self.dash_w != 0:
