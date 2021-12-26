@@ -211,9 +211,8 @@ class SimpleAnimSprite(ImageSprite):
 
 class TriggerSprite(ImageSprite):
     def __init__(self, scene, pos, size):
-        void_image = pygame.Surface(size)
-        void_image.fill((0, 0, 0, 0))
-        super().__init__(scene, pos, void_image)
+        image = pygame.transform.scale(void_image, size)
+        super().__init__(scene, pos, image)
         self.scene.group_ivisibles.add(self)
 
     def triggered(self):
@@ -503,19 +502,25 @@ class SpikeSprite(ImageSprite):
 
 def create_spikes(scene, pos, typ, length):
     if typ == "left":
-        image = spike_image_left
+        spike_image = spike_image_left
     elif typ == "right":
-        image = spike_image_right
+        spike_image = spike_image_right
     elif typ == "up":
-        image = spike_image_up
+        spike_image = spike_image_up
     else:
-        image = spike_image_down
+        spike_image = spike_image_down
     k = 1 if typ == "left" or typ == "right" else 0
-    spike_size = 16
-    length %= spike_size
+    spike_size = 13
+    length //= spike_size
+    size = [length * spike_size + 1, spike_size]
+    if k == 1:
+        size = size[::-1]
+    image = pygame.transform.scale(void_image, size)
+    pos_ = [0, 0]
     for i in range(length):
-        pos[k] += spike_size
-        SpikeSprite(scene, pos, image)
+        image.blit(spike_image, pos_)
+        pos_[k] += spike_size
+    SpikeSprite(scene, pos, image)
 
 
 class TestSpikeSprite(SimpleAnimSprite):
@@ -799,6 +804,8 @@ dash_w = 0.12
 
 # --------------------------------------------- #
 # init sprites values
+
+void_image = pygame.Surface((1, 1), pygame.SRCALPHA, 32).convert_alpha()
 
 player_size = (30, 30 / 7 * 9)
 
