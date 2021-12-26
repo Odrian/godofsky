@@ -9,7 +9,7 @@ from file_import import *
 
 
 def load_image(path, color_key=None):
-    path = os.path.join("media", path)
+    path = os.path.join("images", path)
     if not os.path.isfile(path):
         raise FileExistsError("file not found: " + path)
     image = pygame.image.load(path)
