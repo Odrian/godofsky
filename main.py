@@ -530,12 +530,32 @@ class TestSpikeSprite(SimpleAnimSprite):
         scene.group_spikes.add(self)
 
 
-class WallSprite(ImageSprite):
+class SimpleWallSprite(ImageSprite):
     def __init__(self, scene, pos, size):
         rect = pygame.Surface((1, 1))
         rect.fill((0,) * 3)
         super().__init__(scene, pos, scale(rect, size))
         scene.group_walls.add(self)
+
+
+class WallSprite(ImageSprite):
+    def __init__(self, scene, pos, image):
+        super().__init__(scene, pos, image)
+        scene.group_walls.add(self)
+
+
+def create_wall(scene, pos, typ, length):
+    if typ != "ground":
+        raise Exception("not ground")
+    wall_image = wall_cave_ground
+    wall_size = 28
+    size = [length, wall_size]
+    image = pygame.transform.scale(void_image, size)
+    pos_ = [0, 0]
+    for i in range(length // wall_size):
+        image.blit(wall_image, pos_)
+        pos_[0] += wall_size
+    WallSprite(scene, pos, image)
 
 
 # --------------------------------------------- #
@@ -616,9 +636,9 @@ class GameScene:
         self.fps_i = 0
 
         self.player = PlayerSprite(self, data["start_pos"])
-
         sprite_classes = {
-            "wall": WallSprite,
+            "simple_wall": SimpleWallSprite,
+            "wall": create_wall,
             "coin": CoinSprite,
             "spike": create_spikes,
         }
@@ -639,7 +659,7 @@ class GameScene:
 
         self.fps_i = (self.fps_i + 1) % fps_tick
         if self.fps_i == 0:
-            screen.fill((100,) * 3)
+            screen.fill((20,) * 3)
             self.group_all.draw()
             pygame.display.flip()
 
@@ -830,6 +850,8 @@ spike_image_down = load_image("spike.png")
 spike_image_up = pygame.transform.rotate(spike_image_down, 180)
 spike_image_right = pygame.transform.rotate(spike_image_down, 90)
 spike_image_left = pygame.transform.rotate(spike_image_down, -90)
+
+wall_cave_ground = pygame.transform.scale(load_image("cave_ground.png"), (28, 28))
 
 # --------------------------------------------- #
 # start game
