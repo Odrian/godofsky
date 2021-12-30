@@ -71,46 +71,6 @@ class Group:
                 return True
         return False
 
-    def smart_collide(self, rect):
-        collide = 0b0000  # 8-up 4-down 2-right 1-left
-        for sprite in self:
-            collide |= self._smart_rect_collide(rect, sprite.rect)
-        return collide
-
-    def _smart_rect_collide(self, r1, r2):
-        x11, y11 = r1.topleft
-        w1, h1 = r1.size
-        x12, y12 = x11 + w1, y11 + h1
-
-        x21, y21 = r2.topleft
-        w2, h2 = r2.size
-        x22, y22 = x21 + w2, y21 + h2
-
-        collide_x = x11 <= x22 and x12 >= x21
-        collide_y = y11 <= y22 and y12 >= y21
-        if not (collide_x and collide_y):
-            return 0
-
-        some_collide_x = min(abs(x12 - x21), abs(x11 - x22)) < max_collide_pixels
-        some_collide_y = min(abs(y12 - y21), abs(y11 - y22)) < max_collide_pixels
-
-        collision = 0
-        if collide_x and not some_collide_y:
-            if x11 >= x21 + w2 / 2:
-                collision |= COLLIDE_LEFT
-            else:
-                collision |= COLLIDE_RIGHT
-        if collide_y and not some_collide_x:
-            if y11 >= y21 + h2 / 2:
-                collision |= COLLIDE_DOWN
-            else:
-                collision |= COLLIDE_UP
-        if not y11 + h1 * 2 / 3 > y22:
-            collision |= COLLIDE_HOOK_UP
-        if not y11 + h1 / 3 < y21:
-            collision |= COLLIDE_HOOK_DOWN
-        return collision
-
 
 # --------------------------------------------- #
 # main sprites classes
@@ -256,7 +216,7 @@ class PlayerSprite(MovableSprite):
         self.start_position = pos
         self.group_connected_coins = Group()
         self.keys = {}
-        self.collisions = 0
+        self.collisions = {}
 
         self.jump_can = True
         self.jump_pressed_w = 0
@@ -267,89 +227,27 @@ class PlayerSprite(MovableSprite):
         self.hook_right = True
         self.hook_not_w = 0
 
+        self.dash_skill = False
         self.can_dash = True
         self.dash_w = 0
 
-    def update(self):
-        self.collisions = self.scene.group_walls.smart_collide(self.rect)
-        self.keys = pygame.key.get_pressed()
-
-        # waiting
-        self.jump_ground_w = approach(self.jump_ground_w, 0, dt)
-        self.jump_pressed_w = approach(self.jump_pressed_w, 0, dt)
-        if self.dash_w > 0:
-            self.dash_w = approach(self.dash_w, 0, dt)
-            if not self.dash_w > 0:
-                self.vy = dash_end_y_force * sign(self.vy)
-        self.hook_not_w = approach(self.hook_not_w, 0, dt)
-
-        # check pressed keys
-        if self.keys[KEY_JUMP] and self.jump_pressed_w > 0:
-            self.vy += jump_pressed_force * dt
-        else:
-            self.jump_pressed_w = 0
-
-        # mercy
-        if self.jump_mercy > 0:
-            if self.jump():
-                self.jump_mercy = 0
-            else:
-                self.jump_mercy = approach(self.jump_mercy, 0, dt)
-
-        self.check_hook()
-        # gravity
-        if not ((self.hooked and self.hook_not_w == 0) or self.dash_w != 0):
-            if not self.collisions & COLLIDE_DOWN:
-                self.vy -= gravity * dt
-                if self.vy < -max_gravity:
-                    self.vy = -max_gravity
-                self.jump_can = False
-
-        self.move_x()
-
-        self.check_move()
-        self.move()
-
-        # collect coins
-        if self.collisions & COLLIDE_DOWN:
-            for coin in self.group_connected_coins:
-                coin.collected()
-            self.group_connected_coins.clear()
-
-        # spikes
-        if self.scene.group_spikes.collide(self.rect):
-            self.set_pos(*self.start_position)
-            self.vx, self.vy = 0, 0
-            for coin in self.scene.group_coins:
-                coin.player_connect = False
-
     def collision_all(self, *collides):
         for collide in collides:
-            if not self.collisions & collide:
+            if not self.collisions[collide]:
                 return False
         return True
 
-    def move_x(self):
-        if self.hooked or self.dash_w > 0:
-            return
+    def collision_any(self, *collides):
+        for collide in collides:
+            if self.collisions[collide]:
+                return True
+        return False
 
-        mult = 1 if self.collisions & COLLIDE_DOWN else friction_air
-
-        key_x = 0
-        if self.keys[KEY_RIGHT]:
-            key_x = 1
-        elif self.keys[KEY_LEFT]:
-            key_x = -1
-
-        if abs(self.vx) > max_move and sign(self.vx) == key_x:
-            # slowdown
-            self.vx = approach(self.vx, max_move * key_x, friction_reduce * mult * dt)
-        else:
-            # acceleration
-            self.vx = approach(self.vx, max_move * key_x, friction_accel * mult * dt)
-
+    # input functions
     def dash(self):
-        if not self.can_dash:
+        if DEBUG:
+            return
+        if not (self.dash_skill and self.can_dash):
             return
         xd, yd, xf, yf = 0, 0, 0, 0
 
@@ -378,16 +276,163 @@ class PlayerSprite(MovableSprite):
         self.can_dash = False
         self.vx, self.vy = xf * xd, yf * yd
 
+    def jump(self):
+        if DEBUG:
+            return
+        # simple jump
+        if self.jump_can:
+            if self.jump_ground_w == 0:
+                self.jump_can = False
+                self.jump_pressed_w = jump_pressed_w
+                self.vy = jump_force
+                return True
+        # wall jump
+        elif self.collision_any(COLLIDE_RIGHT, COLLIDE_LEFT):
+            # jump up
+            xd = 1 if self.collisions[COLLIDE_LEFT] else -1
+            self.vx = wall_jump_x * xd
+            self.vy = wall_jump_y
+            self.hooked = False
+            self.hook_not_w = hook_not_w
+            return True
+        else:
+            if self.jump_mercy == 0:
+                self.jump_mercy = jump_mercy
+        return False
+
+    # update functions
+    def update(self):
+        if DEBUG:
+            self.debug_move()
+            return
+
+        self.check_collides()
+        self.keys = pygame.key.get_pressed()
+
+        # waiting
+        self.jump_ground_w = approach(self.jump_ground_w, 0, dt)
+        self.jump_pressed_w = approach(self.jump_pressed_w, 0, dt)
+        if self.dash_w > 0:
+            self.dash_w = approach(self.dash_w, 0, dt)
+            if not self.dash_w > 0:
+                self.vy = dash_end_y_force * sign(self.vy)
+        self.hook_not_w = approach(self.hook_not_w, 0, dt)
+
+        if self.collisions[COLLIDE_DOWN]:
+            self.jump_can = True
+            if self.dash_w == 0:
+                self.can_dash = True
+            if self.vy < 0:
+                self.jump_ground_w = jump_ground_w
+
+        # check pressed keys
+        if self.keys[KEY_JUMP] and self.jump_pressed_w > 0:
+            self.vy += jump_pressed_force * dt
+        else:
+            self.jump_pressed_w = 0
+
+        # mercy
+        if self.jump_mercy > 0:
+            if self.jump():
+                self.jump_mercy = 0
+            else:
+                self.jump_mercy = approach(self.jump_mercy, 0, dt)
+
+        self.check_hook()
+
+        self.move_y()
+        self.move_x()
+
+        self.check_stops()
+        self.move()
+
+        # collect coins
+        if self.collisions[COLLIDE_DOWN]:
+            for coin in self.group_connected_coins:
+                coin.collected()
+            self.group_connected_coins.clear()
+
+        # spikes
+        if self.scene.group_spikes.collide(self.rect):
+            self.set_pos(*self.start_position)
+            self.vx, self.vy = 0, 0
+            for coin in self.scene.group_coins:
+                coin.player_connect = False
+
+    def debug_move(self):
+        keys = pygame.key.get_pressed()
+        f = 2
+        if keys[KEY_JUMP]:
+            f *= 3
+        if keys[KEY_UP]:
+            self.y += f
+        if keys[KEY_DOWN]:
+            self.y -= f
+        if keys[KEY_RIGHT]:
+            self.x += f
+        if keys[KEY_LEFT]:
+            self.x -= f
+        self.move()
+
+    def check_collides(self):
+        collisions = {
+            COLLIDE_UP: False,
+            COLLIDE_DOWN: False,
+            COLLIDE_LEFT: False,
+            COLLIDE_RIGHT: False,
+            COLLIDE_HOOK_UP: False,
+            COLLIDE_HOOK_DOWN: False,
+        }
+        r1 = self.rect
+        for sprite in self.scene.group_walls:
+            r2 = sprite.rect
+
+            x11, y11 = r1.topleft
+            w1, h1 = r1.size
+            x12, y12 = x11 + w1, y11 + h1
+
+            x21, y21 = r2.topleft
+            w2, h2 = r2.size
+            x22, y22 = x21 + w2, y21 + h2
+
+            collide_x = x11 <= x22 and x12 >= x21
+            collide_y = y11 <= y22 and y12 >= y21
+            if not (collide_x and collide_y):
+                continue
+
+            some_collide_x = min(abs(x12 - x21), abs(x11 - x22)) < max_collide_pixels
+            some_collide_y = min(abs(y12 - y21), abs(y11 - y22)) < max_collide_pixels
+
+            if collide_y and not some_collide_x:
+                if y11 >= y21 + h2 / 2:
+                    collisions[COLLIDE_DOWN] = True
+                    self.y += y22 - y11
+                else:
+                    collisions[COLLIDE_UP] = True
+                    self.y += y21 - y12
+            if collide_x and not some_collide_y:
+                if x11 >= x21 + w2 / 2:
+                    collisions[COLLIDE_LEFT] = True
+                    self.x += x22 - x11
+                else:
+                    collisions[COLLIDE_RIGHT] = True
+                    self.x += x21 - x12
+            if not y11 + h1 * 2 / 3 > y22:
+                collisions[COLLIDE_HOOK_UP] = True
+            if not y11 + h1 / 3 < y21:
+                collisions[COLLIDE_HOOK_DOWN] = True
+        self.collisions = collisions
+
     def check_hook(self):
         if self.dash_w != 0:
             return
         # check if you out of available space
         if self.hooked:
             if self.hook_right:
-                if not self.collisions & COLLIDE_RIGHT:
+                if not self.collisions[COLLIDE_RIGHT]:
                     self.hooked = False
             else:
-                if not self.collisions & COLLIDE_LEFT:
+                if not self.collisions[COLLIDE_LEFT]:
                     self.hooked = False
             if not self.collision_all(COLLIDE_HOOK_DOWN, COLLIDE_HOOK_UP):
                 self.hooked = False
@@ -400,11 +445,11 @@ class PlayerSprite(MovableSprite):
                 self.hooked = False
             else:
                 # if you try to hook
-                if self.hook_not_w == 0 and self.collisions & (COLLIDE_LEFT | COLLIDE_RIGHT) and \
+                if self.hook_not_w == 0 and self.collision_any(COLLIDE_LEFT, COLLIDE_RIGHT) and \
                         self.collision_all(COLLIDE_HOOK_DOWN, COLLIDE_HOOK_UP):
                     self.hooked = True
                     self.vy = 0
-                    self.hook_right = self.collisions & COLLIDE_RIGHT
+                    self.hook_right = self.collisions[COLLIDE_RIGHT]
 
         # y move
         if self.hooked and self.hook_not_w == 0:
@@ -415,53 +460,46 @@ class PlayerSprite(MovableSprite):
             else:
                 self.vy = 0
 
-    def check_move(self):
-        if self.collisions & COLLIDE_UP:
+    def move_y(self):
+        if not ((self.hooked and self.hook_not_w == 0) or self.dash_w != 0):
+            if not self.collisions[COLLIDE_DOWN]:
+                self.vy -= gravity * dt
+                if self.vy < -max_gravity:
+                    self.vy = -max_gravity
+                self.jump_can = False
+
+    def move_x(self):
+        if self.hooked or self.dash_w > 0:
+            return
+
+        mult = 1 if self.collisions[COLLIDE_DOWN] else friction_air
+
+        key_x = 0
+        if self.keys[KEY_RIGHT]:
+            key_x = 1
+        elif self.keys[KEY_LEFT]:
+            key_x = -1
+
+        if abs(self.vx) > max_move and sign(self.vx) == key_x:
+            # slowdown
+            self.vx = approach(self.vx, max_move * key_x, friction_reduce * mult * dt)
+        else:
+            # acceleration
+            self.vx = approach(self.vx, max_move * key_x, friction_accel * mult * dt)
+
+    def check_stops(self):
+        if self.collisions[COLLIDE_UP]:
             if self.vy > 0:
                 self.vy = 0
-        if self.collisions & COLLIDE_DOWN:
-            self.jump_can = True
-            if self.dash_w == 0:
-                self.can_dash = True
+        if self.collisions[COLLIDE_DOWN]:
             if self.vy < 0:
                 self.vy = 0
-                self.jump_ground_w = jump_ground_w
-        if self.collisions & COLLIDE_RIGHT:
+        if self.collisions[COLLIDE_RIGHT]:
             if self.vx > 0:
                 self.vx = 0
-        if self.collisions & COLLIDE_LEFT:
+        if self.collisions[COLLIDE_LEFT]:
             if self.vx < 0:
                 self.vx = 0
-
-    def jump(self):
-        # simple jump
-        if self.jump_can:
-            if self.jump_ground_w == 0:
-                self.jump_can = False
-                self.jump_pressed_w = jump_pressed_w
-                self.vy = jump_force
-                return True
-        # wall jump
-        elif self.collisions & (COLLIDE_RIGHT | COLLIDE_LEFT):
-            # jump up
-            if self.hooked and not (not self.hook_right and self.keys[KEY_RIGHT] or
-                                    self.hook_right and self.keys[KEY_LEFT]):
-                if self.hook_not_w == 0:
-                    self.hook_not_w = hook_not_w
-                    self.vy = hook_up_jump
-                else:
-                    if self.jump_mercy == 0:
-                        self.jump_mercy = jump_mercy
-            # jump off the wall
-            else:
-                xd = 1 if self.collisions & COLLIDE_LEFT else -1
-                self.vx = wall_jump_x * xd
-                self.vy = wall_jump_y
-                self.hooked = False
-        else:
-            if self.jump_mercy == 0:
-                self.jump_mercy = jump_mercy
-        return False
 
 
 class CoinSprite(MovableSprite):
@@ -496,32 +534,35 @@ class CoinSprite(MovableSprite):
 
 
 class SpikeSprite(ImageSprite):
-    def __init__(self, scene, pos, image):
+    def __init__(self, scene, pos, typ, length):
+        spike_image = self._choice_image(typ)
+        image = self._create_image(spike_image, length, typ)
         super().__init__(scene, pos, image)
         scene.group_spikes.add(self)
 
+    def _choice_image(self, typ):
+        if typ == "left":
+            return spike_image_left
+        elif typ == "right":
+            return spike_image_right
+        elif typ == "up":
+            return spike_image_up
+        else:
+            return spike_image_down
 
-def create_spikes(scene, pos, typ, length):
-    if typ == "left":
-        spike_image = spike_image_left
-    elif typ == "right":
-        spike_image = spike_image_right
-    elif typ == "up":
-        spike_image = spike_image_up
-    else:
-        spike_image = spike_image_down
-    k = 1 if typ == "left" or typ == "right" else 0
-    spike_size = 13
-    length //= spike_size
-    size = [length * spike_size + 1, spike_size]
-    if k == 1:
-        size = size[::-1]
-    image = pygame.transform.scale(void_image, size)
-    pos_ = [0, 0]
-    for i in range(length):
-        image.blit(spike_image, pos_)
-        pos_[k] += spike_size
-    SpikeSprite(scene, pos, image)
+    def _create_image(self, spike_image, length, typ):
+        k = 1 if typ == "left" or typ == "right" else 0
+        spike_size = 13
+        length //= spike_size
+        size = [length * spike_size + 1, spike_size]
+        if k == 1:
+            size = size[::-1]
+        image = pygame.transform.scale(void_image, size)
+        pos_ = [0, 0]
+        for i in range(length):
+            image.blit(spike_image, pos_)
+            pos_[k] += spike_size
+        return image
 
 
 class TestSpikeSprite(SimpleAnimSprite):
@@ -539,23 +580,32 @@ class SimpleWallSprite(ImageSprite):
 
 
 class WallSprite(ImageSprite):
-    def __init__(self, scene, pos, image):
+    def __init__(self, scene, pos, typ, length):
+        wall_image = self._choice_image(typ)
+        image = self._create_image(wall_image, length, typ)
         super().__init__(scene, pos, image)
         scene.group_walls.add(self)
 
+    def _choice_image(self, typ):
+        if typ == "ground":
+            return wall_cave_ground
+        else:
+            pass
 
-def create_wall(scene, pos, typ, length):
-    if typ != "ground":
-        raise Exception("not ground")
-    wall_image = wall_cave_ground
-    wall_size = 28
-    size = [length, wall_size]
-    image = pygame.transform.scale(void_image, size)
-    pos_ = [0, 0]
-    for i in range(length // wall_size):
-        image.blit(wall_image, pos_)
-        pos_[0] += wall_size
-    WallSprite(scene, pos, image)
+    def _create_image(self, wall_image, length, typ):
+        wall_size = 28
+        size = [length, wall_size]
+        image = pygame.transform.scale(void_image, size)
+        pos_ = [0, 0]
+        for i in range(length // wall_size + 1):
+            image.blit(wall_image, pos_)
+            pos_[0] += wall_size
+        return image
+
+
+class ShadowSprite(ImageSprite):
+    def __init__(self, scene, pos, size):
+        super().__init__(scene, pos, scale(shadow, size))
 
 
 # --------------------------------------------- #
@@ -623,11 +673,10 @@ class GameScene:
 
         self.player = None
 
-        self.load_level()
+        self.load_level("level0")
 
-    def load_level(self):
-        level_name = "level0"
-        data = load_data("levels/" + level_name + ".json")
+    def load_level(self, level_name):
+        level = load_data("levels/" + level_name + ".json")
 
         self.group_all.clear()
         self.group_walls.clear()
@@ -635,15 +684,29 @@ class GameScene:
         self.group_coins.clear()
         self.fps_i = 0
 
-        self.player = PlayerSprite(self, data["start_pos"])
+        player_pos = self.convert(level["start_pos"])
+        self.player = PlayerSprite(self, player_pos)
+
+        global camera_x, camera_y
+        camera_x = player_pos[0] - (width - player_size[0]) // 2
+        camera_y = player_pos[1] - (height - player_size[1]) // 2
+
         sprite_classes = {
-            "simple_wall": SimpleWallSprite,
-            "wall": create_wall,
-            "coin": CoinSprite,
-            "spike": create_spikes,
+            "walls": SimpleWallSprite,
+            "spikes": SpikeSprite,
+            "coins": CoinSprite,
+            "shadows": ShadowSprite,
         }
-        for sprite in data["sprites"]:
-            sprite_classes[sprite[0]](self, *sprite[1:])
+        sprites = level["sprites"]
+        for typ in sprite_classes:
+            for data in sprites[typ]:
+                sprite_classes[typ](self, *map(self.convert, data))
+
+    def convert(self, value):
+        typ = type(value)
+        if typ in (list, tuple):
+            return list(map(lambda x: int(x * 20), value))
+        return value
 
     def loop(self):
         while True:
@@ -664,25 +727,29 @@ class GameScene:
             pygame.display.flip()
 
     def events(self):
+        global size, height, width
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
+            typ = event.type
+            if typ == pygame.QUIT:
                 terminate()
-            elif event.type == pygame.KEYDOWN:
+            elif typ == pygame.KEYDOWN:
                 key = event.key
                 if key == KEY_JUMP:
                     self.player.jump()
                 elif key == KEY_DASH:
                     self.player.dash()
-            elif event.type == pygame.MOUSEBUTTONDOWN:
+            elif typ == pygame.MOUSEBUTTONDOWN:
                 if event.button == pygame.BUTTON_LEFT:
                     x, y = event.pos
                     pos = (camera_x + x, camera_y + height - y)
                     for i in range(20):
                         ParticleSprite(self, pos, )
+            elif typ == pygame.VIDEORESIZE:
+                size = width, height = (screen.get_width(), screen.get_height())
 
     def camera_move(self):
-        max_camera_dist = 50
         global camera_x, camera_y
+        max_camera_dist = 50
         player_x = self.player.x - (width - player_size[0]) / 2
         player_y = self.player.y - (height - player_size[1]) / 2
 
@@ -730,10 +797,18 @@ class SettingScene:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 terminate()
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                x, y = event.pos
+                y = height - y
+                for button in self.group_buttons:
+                    if button.rect.collidepoint(x, y):
+                        # button press
+                        break
             elif event.type == pygame.MOUSEBUTTONUP:
                 x, y = event.pos
                 y = height - y
                 for button in self.group_buttons:
+                    # button unpress
                     if button.rect.collidepoint(x, y):
                         self.button_click(button.code)
                         break
@@ -771,7 +846,7 @@ pygame.display.set_caption("God of Sky")
 pygame.font.init()
 
 size = width, height = 1400, 700
-screen = pygame.display.set_mode(size)
+screen = pygame.display.set_mode(size, pygame.RESIZABLE)
 clock = pygame.time.Clock()
 
 camera_x, camera_y = 0, 0
@@ -788,6 +863,8 @@ COLLIDE_LEFT = 1
 
 # --------------------------------------------- #
 # init consts
+
+real_width, real_height = 1400, 700
 
 max_collide_pixels = 5
 
@@ -814,7 +891,7 @@ move_force = max_move * 12
 hook_move_force = 150
 
 hook_up_jump = 360
-hook_not_w = 0.4
+hook_not_w = 0.1
 
 wall_jump_x = 400
 wall_jump_y = 400
@@ -825,10 +902,10 @@ dash_w = 0.12
 
 # --------------------------------------------- #
 # init sprites values
-
 void_image = pygame.Surface((1, 1), pygame.SRCALPHA, 32).convert_alpha()
+shadow = load_image("shadow.png")
 
-player_size = (30, 30 / 7 * 9)
+player_size = (30, 40)
 
 button_size = (64,) * 2
 
@@ -856,6 +933,8 @@ wall_cave_ground = pygame.transform.scale(load_image("cave_ground.png"), (28, 28
 # --------------------------------------------- #
 # start game
 
-StartScene().loop()
+DEBUG = True
+
+# StartScene().loop()
 
 GameScene().loop()
