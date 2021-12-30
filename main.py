@@ -32,6 +32,27 @@ def approach(value, mx, step):
         return value + step
 
 
+def screen_draw():
+    scale_ = min(window_width / width, window_height / height)
+    dx = (window_width - width * scale_) // 2
+    dy = (window_height - height * scale_) // 2
+    window.blit(scale(screen, (width * scale_, height * scale_)), (dx, dy))
+    pygame.display.flip()
+
+
+def convert_position(x, y):
+    y = window_height - y
+    scale_ = min(window_width / width, window_height / height)
+    dx = (window_width - width * scale_) / 2
+    dy = (window_height - height * scale_) / 2
+    return (x - dx) / scale_, (y - dy) / scale_
+
+
+def terminate():
+    pygame.quit()
+    exit()
+
+
 class Group:
     def __init__(self):
         self.sprites = []
@@ -618,11 +639,12 @@ class StartScene:
         self.group_all = Group()
         self.group_buttons = Group()
 
-        self.game_name = pygame.font.SysFont('Comic Sans MS', 60).render("My amazing game", True, (0, 0, 0))
-
         bk = load_image("start_background.png")
         k = bk.get_width() / bk.get_height()
-        self.background = scale(bk, (height * k, height))
+        ImageSprite(self, (0, 0), scale(bk, (height * k, height)))
+
+        game_name = pygame.font.SysFont('Comic Sans MS', 60).render("My amazing game", True, (0, 0, 0))
+        ImageSprite(self, (140, 550), game_name)
 
         create_button(self, (350, 310), "play")
         create_button(self, (450, 310), "exit")
@@ -636,21 +658,28 @@ class StartScene:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 terminate()
-            elif event.type == pygame.MOUSEBUTTONUP:
-                x, y = event.pos
-                y = height - y
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                x, y = convert_position(*event.pos)
                 for button in self.group_buttons:
+                    if button.rect.collidepoint(x, y):
+                        # button press
+                        break
+            elif event.type == pygame.MOUSEBUTTONUP:
+                x, y = convert_position(*event.pos)
+                for button in self.group_buttons:
+                    # button unpress
                     if button.rect.collidepoint(x, y):
                         self.button_click(button.code)
                         break
+            elif event.type == pygame.VIDEORESIZE:
+                global window_height, window_width
+                window_width, window_height = (window.get_width(), window.get_height())
 
         self.group_all.update()
 
-        screen.blit(self.background, (0, 0))
-        screen.blit(self.game_name, (100, 50))
-
         self.group_all.draw()
-        pygame.display.flip()
+
+        screen_draw()
         clock.tick(fps)
 
     def button_click(self, code):
@@ -724,28 +753,27 @@ class GameScene:
         if self.fps_i == 0:
             screen.fill((20,) * 3)
             self.group_all.draw()
-            pygame.display.flip()
+            screen_draw()
 
     def events(self):
-        global size, height, width
         for event in pygame.event.get():
-            typ = event.type
-            if typ == pygame.QUIT:
+            if event.type == pygame.QUIT:
                 terminate()
-            elif typ == pygame.KEYDOWN:
+            elif event.type == pygame.KEYDOWN:
                 key = event.key
                 if key == KEY_JUMP:
                     self.player.jump()
                 elif key == KEY_DASH:
                     self.player.dash()
-            elif typ == pygame.MOUSEBUTTONDOWN:
+            elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == pygame.BUTTON_LEFT:
-                    x, y = event.pos
-                    pos = (camera_x + x, camera_y + height - y)
+                    x, y = convert_position(*event.pos)
+                    pos = (camera_x + x, camera_y + y)
                     for i in range(20):
                         ParticleSprite(self, pos, )
-            elif typ == pygame.VIDEORESIZE:
-                size = width, height = (screen.get_width(), screen.get_height())
+            elif event.type == pygame.VIDEORESIZE:
+                global window_height, window_width
+                window_width, window_height = (window.get_width(), window.get_height())
 
     def camera_move(self):
         global camera_x, camera_y
@@ -782,9 +810,10 @@ class SettingScene:
         self.group_all = Group()
         self.group_buttons = Group()
 
-        self.background_scene = screen.copy()
-        self.fade = pygame.Surface((width, height))
-        self.fade.set_alpha(200)
+        ImageSprite(self, (0, 0), screen.copy())
+        fade = pygame.Surface((width, height))
+        fade.set_alpha(200)
+        ImageSprite(self, (0, 0), fade)
 
         create_button(self, (400, 100), "yes")
         create_button(self, (500, 100), "no")
@@ -798,28 +827,26 @@ class SettingScene:
             if event.type == pygame.QUIT:
                 terminate()
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                x, y = event.pos
-                y = height - y
+                x, y = convert_position(*event.pos)
                 for button in self.group_buttons:
                     if button.rect.collidepoint(x, y):
                         # button press
                         break
             elif event.type == pygame.MOUSEBUTTONUP:
-                x, y = event.pos
-                y = height - y
+                x, y = convert_position(*event.pos)
                 for button in self.group_buttons:
                     # button unpress
                     if button.rect.collidepoint(x, y):
                         self.button_click(button.code)
                         break
+            elif event.type == pygame.VIDEORESIZE:
+                global window_height, window_width
+                window_width, window_height = (window.get_width(), window.get_height())
 
         self.group_all.update()
 
-        screen.blit(self.background_scene, (0, 0))
-        screen.blit(self.fade, (0, 0))
-
         self.group_all.draw()
-        pygame.display.flip()
+        screen_draw()
         clock.tick(fps)
 
     def button_click(self, code):
@@ -831,22 +858,18 @@ class SettingScene:
 
 
 # --------------------------------------------- #
-# close game
-
-def terminate():
-    pygame.quit()
-    exit()
-
-
-# --------------------------------------------- #
 # init pygame
 
 pygame.init()
 pygame.display.set_caption("God of Sky")
 pygame.font.init()
 
-size = width, height = 1400, 700
-screen = pygame.display.set_mode(size, pygame.RESIZABLE)
+window_width, window_height = 1400, 700
+window = pygame.display.set_mode((window_width, window_height), pygame.RESIZABLE)
+
+width, height = 1400, 700
+screen = pygame.Surface((width, height))
+
 clock = pygame.time.Clock()
 
 camera_x, camera_y = 0, 0
@@ -863,8 +886,6 @@ COLLIDE_LEFT = 1
 
 # --------------------------------------------- #
 # init consts
-
-real_width, real_height = 1400, 700
 
 max_collide_pixels = 5
 
@@ -933,8 +954,8 @@ wall_cave_ground = pygame.transform.scale(load_image("cave_ground.png"), (28, 28
 # --------------------------------------------- #
 # start game
 
-DEBUG = True
+DEBUG = False
 
-# StartScene().loop()
+StartScene().loop()
 
 GameScene().loop()
