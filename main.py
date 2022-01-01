@@ -352,17 +352,17 @@ class PlayerSprite(MovableSprite):
         else:
             self.jump_pressed_w = 0
 
+        self.check_hook()
+
+        self.move_y()
+        self.move_x()
+
         # mercy
         if self.jump_mercy > 0:
             if self.jump():
                 self.jump_mercy = 0
             else:
                 self.jump_mercy = approach(self.jump_mercy, 0, dt)
-
-        self.check_hook()
-
-        self.move_y()
-        self.move_x()
 
         self.check_stops()
         self.move()
@@ -562,17 +562,17 @@ class SpikeSprite(ImageSprite):
         scene.group_spikes.add(self)
 
     def _choice_image(self, typ):
-        if typ == "left":
+        if typ == "l":
             return spike_image_left
-        elif typ == "right":
+        elif typ == "r":
             return spike_image_right
-        elif typ == "up":
+        elif typ == "u":
             return spike_image_up
         else:
             return spike_image_down
 
     def _create_image(self, spike_image, length, typ):
-        k = 1 if typ == "left" or typ == "right" else 0
+        k = 1 if typ in "lr" else 0
         spike_size = 13
         length //= spike_size
         size = [length * spike_size + 1, spike_size]
@@ -603,7 +603,7 @@ class SimpleWallSprite(ImageSprite):
 class WallSprite(ImageSprite):
     def __init__(self, scene, pos, typ, length):
         wall_image = self._choice_image(typ)
-        image = self._create_image(wall_image, length, typ)
+        image = self._create_image(wall_image, length)
         super().__init__(scene, pos, image)
         scene.group_walls.add(self)
 
@@ -613,7 +613,7 @@ class WallSprite(ImageSprite):
         else:
             pass
 
-    def _create_image(self, wall_image, length, typ):
+    def _create_image(self, wall_image, length):
         wall_size = 28
         size = [length, wall_size]
         image = pygame.transform.scale(void_image, size)
@@ -632,23 +632,12 @@ class ShadowSprite(ImageSprite):
 # --------------------------------------------- #
 # scene classes
 
-class StartScene:
+class ButtonsScene:
     def __init__(self):
         self.running = True
 
         self.group_all = Group()
         self.group_buttons = Group()
-
-        bk = load_image("start_background.png")
-        k = bk.get_width() / bk.get_height()
-        ImageSprite(self, (0, 0), scale(bk, (height * k, height)))
-
-        game_name = pygame.font.SysFont('Comic Sans MS', 60).render("My amazing game", True, (0, 0, 0))
-        ImageSprite(self, (140, 550), game_name)
-
-        create_button(self, (350, 310), "play")
-        create_button(self, (450, 310), "exit")
-        create_button(self, (550, 310), "settings")
 
     def loop(self):
         while self.running:
@@ -678,9 +667,27 @@ class StartScene:
         self.group_all.update()
 
         self.group_all.draw()
-
         screen_draw()
         clock.tick(fps)
+
+    def button_click(self, code):
+        pass
+
+
+class StartScene(ButtonsScene):
+    def __init__(self):
+        super().__init__()
+
+        bk = load_image("start_background.png")
+        k = bk.get_width() / bk.get_height()
+        ImageSprite(self, (0, 0), scale(bk, (height * k, height)))
+
+        game_name = pygame.font.SysFont('Comic Sans MS', 60).render("My amazing game", True, (0, 0, 0))
+        ImageSprite(self, (140, 550), game_name)
+
+        create_button(self, (350, 310), "play")
+        create_button(self, (450, 310), "exit")
+        create_button(self, (550, 310), "settings")
 
     def button_click(self, code):
         if code == "play":
@@ -762,7 +769,7 @@ class GameScene:
             elif event.type == pygame.KEYDOWN:
                 key = event.key
                 if key == KEY_JUMP:
-                    self.player.jump()
+                    self.player.jump_mercy = jump_mercy
                 elif key == KEY_DASH:
                     self.player.dash()
             elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -803,12 +810,9 @@ class MenuScene:
     pass
 
 
-class SettingScene:
+class SettingScene(ButtonsScene):
     def __init__(self):
-        self.running = True
-
-        self.group_all = Group()
-        self.group_buttons = Group()
+        super().__init__()
 
         ImageSprite(self, (0, 0), screen.copy())
         fade = pygame.Surface((width, height))
@@ -817,37 +821,6 @@ class SettingScene:
 
         create_button(self, (400, 100), "yes")
         create_button(self, (500, 100), "no")
-
-    def loop(self):
-        while self.running:
-            self.tick()
-
-    def tick(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                terminate()
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                x, y = convert_position(*event.pos)
-                for button in self.group_buttons:
-                    if button.rect.collidepoint(x, y):
-                        # button press
-                        break
-            elif event.type == pygame.MOUSEBUTTONUP:
-                x, y = convert_position(*event.pos)
-                for button in self.group_buttons:
-                    # button unpress
-                    if button.rect.collidepoint(x, y):
-                        self.button_click(button.code)
-                        break
-            elif event.type == pygame.VIDEORESIZE:
-                global window_height, window_width
-                window_width, window_height = (window.get_width(), window.get_height())
-
-        self.group_all.update()
-
-        self.group_all.draw()
-        screen_draw()
-        clock.tick(fps)
 
     def button_click(self, code):
         if code == "yes":
@@ -877,10 +850,10 @@ camera_x, camera_y = 0, 0
 # --------------------------------------------- #
 # init special consts
 
-COLLIDE_HOOK_UP = 32
-COLLIDE_HOOK_DOWN = 16
-COLLIDE_UP = 8
-COLLIDE_DOWN = 4
+COLLIDE_HOOK_UP = 6
+COLLIDE_HOOK_DOWN = 5
+COLLIDE_UP = 4
+COLLIDE_DOWN = 3
 COLLIDE_RIGHT = 2
 COLLIDE_LEFT = 1
 
@@ -904,7 +877,7 @@ jump_force = 300
 jump_pressed_w = 0.3
 jump_pressed_force = gravity / 2
 jump_ground_w = 0.05
-jump_mercy = 0.2
+jump_mercy = 0.3
 
 max_move = 200
 move_force = max_move * 12
@@ -923,6 +896,7 @@ dash_w = 0.12
 
 # --------------------------------------------- #
 # init sprites values
+
 void_image = pygame.Surface((1, 1), pygame.SRCALPHA, 32).convert_alpha()
 shadow = load_image("shadow.png")
 
