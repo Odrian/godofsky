@@ -869,15 +869,6 @@ class GameScene:
                 elif key == pygame.K_g:
                     global DEBUG
                     DEBUG = False
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == pygame.BUTTON_LEFT:
-                    x, y = convert_position(*event.pos)
-                    x += camera_x - player_size[0] / 2
-                    y += camera_y - player_size[1] / 2
-                    self.player.set_pos(x, y)
-                    # pos = (camera_x + x, camera_y + y)
-                    # for i in range(20):
-                    #     ParticleSprite(self, pos)
             elif event.type == pygame.VIDEORESIZE:
                 global window_height, window_width
                 window_width, window_height = (window.get_width(), window.get_height())
