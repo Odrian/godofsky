@@ -1,11 +1,18 @@
 import os
 from sys import exit
 
-from numpy import sign
 from random import randint
-from pygame.transform import scale
+from pygame.transform import scale, rotate
 
 from file_import import *
+
+
+def sign(x):
+    if x == 0:
+        return 0
+    if x > 0:
+        return 1
+    return -1
 
 
 def load_image(path, color_key=None):
@@ -191,10 +198,9 @@ class SimpleAnimSprite(ImageSprite):
 
 
 class TriggerSprite(ImageSprite):
-    def __init__(self, scene, pos, size):
-        image = pygame.transform.scale(void_image, size)
+    def __init__(self, scene, pos, image):
         super().__init__(scene, pos, image)
-        self.scene.group_ivisibles.add(self)
+        self.scene.group_triggers.add(self)
 
     def triggered(self):
         pass
@@ -217,8 +223,24 @@ class ParticleSprite(MovableSprite):
         self.move()
 
 
+class TextSprite(ImageSprite):
+    def __init__(self, scene, pos, font, text):
+        image = pygame.font.SysFont('Comic Sans MS', font).render(text, True, (0, 0, 0))
+        super().__init__(scene, pos, image)
+
+
 # --------------------------------------------- #
 # not main sprite classes
+
+class SpawnSprite(TriggerSprite):
+    def __init__(self, scene, pos, size, spawn_pos, priority):
+        super().__init__(scene, pos, scale(void_image, size))
+        self.spawn_pos = spawn_pos
+        self.priority = priority
+
+    def triggered(self):
+        self.scene.player.set_spawn(self.spawn_pos, self.priority)
+
 
 class ButtonSprite(ImageSprite):
     def __init__(self, scene, pos, image, code):
@@ -234,8 +256,8 @@ def create_button(scene, pos, code):
 class PlayerSprite(MovableSprite):
     def __init__(self, scene, pos):
         super().__init__(scene, pos, scale(load_image("player.png"), player_size))
-        self.start_position = pos
-        self.group_connected_coins = Group()
+        self.spawn_priority = 0
+        self.spawn_position = pos
         self.keys = {}
         self.collisions = {}
 
@@ -265,6 +287,10 @@ class PlayerSprite(MovableSprite):
         return False
 
     # input functions
+    def set_spawn(self, pos, priority):
+        if self.spawn_priority < priority:
+            self.spawn_position = pos
+
     def dash(self):
         if DEBUG:
             return
@@ -321,6 +347,14 @@ class PlayerSprite(MovableSprite):
                 self.jump_mercy = jump_mercy
         return False
 
+    def die(self):
+        self.set_pos(*self.spawn_position)
+        global camera_x, camera_y
+        camera_x = self.x - (width - player_size[0]) // 2
+        camera_y = self.y - (height - player_size[1]) // 2
+        self.vx, self.vy = 0, 0
+        self.jump_mercy = 0
+
     # update functions
     def update(self):
         if DEBUG:
@@ -328,6 +362,7 @@ class PlayerSprite(MovableSprite):
             return
 
         self.check_collides()
+        self.check_triggers()
         self.keys = pygame.key.get_pressed()
 
         # waiting
@@ -368,19 +403,22 @@ class PlayerSprite(MovableSprite):
         self.move()
 
         # collect coins
-        if self.collisions[COLLIDE_DOWN]:
-            for coin in self.group_connected_coins:
+        for coin in self.scene.group_coins:
+            if self.rect.colliderect(coin.rect):
                 coin.collected()
-            self.group_connected_coins.clear()
 
         # spikes
         if self.scene.group_spikes.collide(self.rect):
-            self.set_pos(*self.start_position)
-            self.vx, self.vy = 0, 0
-            for coin in self.scene.group_coins:
-                coin.player_connect = False
+            self.die()
+
+    def check_triggers(self):
+        collide_func = self.rect.colliderect
+        for trigger in self.scene.group_triggers:
+            if collide_func(trigger.rect):
+                trigger.triggered()
 
     def debug_move(self):
+        self.check_triggers()
         keys = pygame.key.get_pressed()
         f = 2
         if keys[KEY_JUMP]:
@@ -523,35 +561,26 @@ class PlayerSprite(MovableSprite):
                 self.vx = 0
 
 
-class CoinSprite(MovableSprite):
+class CoinSprite(ImageSprite):
     def __init__(self, scene, pos):
         super().__init__(scene, pos, coin_image)
         self.position = pos
         self.scene.group_coins.add(self)
         self.player_connect = False
-
-        self.min_dist = 30
-        self.k = 2
+        self.timer = -1
 
     def update(self):
-        if self.player_connect:
-            dx = self.scene.player.x - self.x
-            self.vx = dx * self.k if abs(dx) > self.min_dist else 0
-
-            dy = self.scene.player.y - self.y
-            self.vy = dy * self.k
-
-            self.move()
-        else:
-            self.set_pos(*self.position)
-            if self.scene.player.rect.colliderect(self.rect):
-                self.player_connect = True
-                self.scene.player.group_connected_coins.add(self)
+        if self.timer != -1:
+            self.timer -= 1
+            self.image.set_alpha(self.timer)
+            if self.timer == 0:
+                self.scene.group_all.remove(self)
 
     def collected(self):
+        global coins_count
+        coins_count += 1
+        self.timer = 255
         self.scene.group_coins.remove(self)
-        self.scene.group_all.remove(self)
-        pass  # save that was collected
 
 
 class SpikeSprite(ImageSprite):
@@ -578,7 +607,7 @@ class SpikeSprite(ImageSprite):
         size = [length * spike_size + 1, spike_size]
         if k == 1:
             size = size[::-1]
-        image = pygame.transform.scale(void_image, size)
+        image = scale(void_image, size)
         pos_ = [0, 0]
         for i in range(length):
             image.blit(spike_image, pos_)
@@ -594,9 +623,7 @@ class TestSpikeSprite(SimpleAnimSprite):
 
 class SimpleWallSprite(ImageSprite):
     def __init__(self, scene, pos, size):
-        rect = pygame.Surface((1, 1))
-        rect.fill((0,) * 3)
-        super().__init__(scene, pos, scale(rect, size))
+        super().__init__(scene, pos, scale(black_image, size))
         scene.group_walls.add(self)
 
 
@@ -616,7 +643,7 @@ class WallSprite(ImageSprite):
     def _create_image(self, wall_image, length):
         wall_size = 28
         size = [length, wall_size]
-        image = pygame.transform.scale(void_image, size)
+        image = scale(void_image, size)
         pos_ = [0, 0]
         for i in range(length // wall_size + 1):
             image.blit(wall_image, pos_)
@@ -625,8 +652,67 @@ class WallSprite(ImageSprite):
 
 
 class ShadowSprite(ImageSprite):
-    def __init__(self, scene, pos, size):
-        super().__init__(scene, pos, scale(shadow, size))
+    def __init__(self, scene, pos, size, angle=0):
+        image = rotate(scale(shadow, size), angle)
+        super().__init__(scene, pos, image)
+
+
+class DoorSprite(TriggerSprite):
+    def __init__(self, scene, pos, level):
+        super().__init__(scene, pos, scale(yellow_image, (40, 60)))
+        self.level = level
+
+    def triggered(self):
+        self.scene.load_level(self.level)
+
+
+class CannonSprite(ImageSprite):
+    def __init__(self, scene, pos, size, angle, data):
+        super().__init__(scene, pos, rotate(scale(cannon_image, size), angle))
+        self.angle = angle
+        pos[0] += self.rect.w / 2 - 3
+        pos[1] += self.rect.h / 2 - 3
+        self.pos = pos
+        rate, speed, rnd, rnd0 = data
+        rate = randint(rate // rnd, rate * rnd // 1)
+        speed = randint(speed // rnd, speed * rnd // 1)
+        self.rate = rate
+        self.speed = speed
+        self.tick = 0
+        if rnd0:
+            self.tick = randint(0, rate)
+
+    def update(self):
+        self.tick += 1
+        if self.tick >= self.rate:
+            BulletSprite(self.scene, self.pos, self.angle, self.speed)
+            self.tick -= self.rate
+
+
+def create_cannon(scene, pos, size, angle, data, xy=(1, 1)):
+    for x in range(xy[0]):
+        for y in range(xy[1]):
+            CannonSprite(scene, [pos[0] + size[0] * x, pos[1] + size[1] * y], size, angle, data)
+
+
+class BulletSprite(MovableSprite):
+    def __init__(self, scene, pos, angle, speed):
+        super().__init__(scene, pos, bullet_image)
+        if angle == 0:
+            self.vy = speed
+        elif angle == 180:
+            self.vy = -speed
+        elif angle == 90:
+            self.vx = speed
+        elif angle == -90:
+            self.vx = -speed
+
+    def update(self):
+        self.move()
+        if self.rect.colliderect(self.scene.player.rect):
+            self.scene.player.die()
+        if self.scene.group_walls.collide(self.rect):
+            self.scene.group_all.remove(self)
 
 
 # --------------------------------------------- #
@@ -666,6 +752,7 @@ class ButtonsScene:
 
         self.group_all.update()
 
+        screen.fill((20,) * 3)
         self.group_all.draw()
         screen_draw()
         clock.tick(fps)
@@ -678,16 +765,11 @@ class StartScene(ButtonsScene):
     def __init__(self):
         super().__init__()
 
-        bk = load_image("start_background.png")
-        k = bk.get_width() / bk.get_height()
-        ImageSprite(self, (0, 0), scale(bk, (height * k, height)))
+        TextSprite(self, (140, 400), 60, "My amazing game")
 
-        game_name = pygame.font.SysFont('Comic Sans MS', 60).render("My amazing game", True, (0, 0, 0))
-        ImageSprite(self, (140, 550), game_name)
-
-        create_button(self, (350, 310), "play")
-        create_button(self, (450, 310), "exit")
-        create_button(self, (550, 310), "settings")
+        create_button(self, (250, 220), "play")
+        # create_button(self, (350, 220), "exit")
+        # create_button(self, (450, 220), "settings")
 
     def button_click(self, code):
         if code == "play":
@@ -700,18 +782,24 @@ class StartScene(ButtonsScene):
 
 class GameScene:
     def __init__(self):
+        self.running = True
+
         self.fps_i = 0
 
         self.group_all = Group()
         self.group_walls = Group()
         self.group_spikes = Group()
         self.group_coins = Group()
+        self.group_triggers = Group()
 
         self.player = None
 
         self.load_level("level0")
 
     def load_level(self, level_name):
+        if level_name == "end":
+            self.running = False
+            return
         level = load_data("levels/" + level_name + ".json")
 
         self.group_all.clear()
@@ -728,15 +816,21 @@ class GameScene:
         camera_y = player_pos[1] - (height - player_size[1]) // 2
 
         sprite_classes = {
-            "walls": SimpleWallSprite,
+            "black": SimpleWallSprite,
             "spikes": SpikeSprite,
+            "cannons": create_cannon,
+            "walls": SimpleWallSprite,
             "coins": CoinSprite,
             "shadows": ShadowSprite,
+            "spawns": SpawnSprite,
+            "text": TextSprite,
+            "door": DoorSprite,
         }
         sprites = level["sprites"]
         for typ in sprite_classes:
             for data in sprites[typ]:
-                sprite_classes[typ](self, *map(self.convert, data))
+                new_data = list(map(self.convert, data[:3])) + data[3:]
+                sprite_classes[typ](self, *new_data)
 
     def convert(self, value):
         typ = type(value)
@@ -745,7 +839,7 @@ class GameScene:
         return value
 
     def loop(self):
-        while True:
+        while self.running:
             self.tick()
 
     def tick(self):
@@ -772,12 +866,18 @@ class GameScene:
                     self.player.jump_mercy = jump_mercy
                 elif key == KEY_DASH:
                     self.player.dash()
+                elif key == pygame.K_g:
+                    global DEBUG
+                    DEBUG = False
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == pygame.BUTTON_LEFT:
                     x, y = convert_position(*event.pos)
-                    pos = (camera_x + x, camera_y + y)
-                    for i in range(20):
-                        ParticleSprite(self, pos, )
+                    x += camera_x - player_size[0] / 2
+                    y += camera_y - player_size[1] / 2
+                    self.player.set_pos(x, y)
+                    # pos = (camera_x + x, camera_y + y)
+                    # for i in range(20):
+                    #     ParticleSprite(self, pos)
             elif event.type == pygame.VIDEORESIZE:
                 global window_height, window_width
                 window_width, window_height = (window.get_width(), window.get_height())
@@ -830,6 +930,35 @@ class SettingScene(ButtonsScene):
             self.running = False
 
 
+class EndScene:
+    def __init__(self):
+        global camera_x, camera_y
+        camera_x, camera_y = 0, 0
+        self.running = True
+        self.group_all = Group()
+        TextSprite(self, [250, 350], 60, "Спасибо за игру")
+        TextSprite(self, [250, 100], 30, f"Вы собрали {coins_count}/2 Пончиков")
+
+    def loop(self):
+        while True:
+            self.tick()
+
+    def tick(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                terminate()
+            elif event.type == pygame.VIDEORESIZE:
+                global window_height, window_width
+                window_width, window_height = (window.get_width(), window.get_height())
+
+        self.group_all.update()
+
+        screen.fill((20,) * 3)
+        self.group_all.draw()
+        screen_draw()
+        clock.tick(fps)
+
+
 # --------------------------------------------- #
 # init pygame
 
@@ -840,7 +969,7 @@ pygame.font.init()
 window_width, window_height = 1400, 700
 window = pygame.display.set_mode((window_width, window_height), pygame.RESIZABLE)
 
-width, height = 1400, 700
+width, height = 1000, 500
 screen = pygame.Surface((width, height))
 
 clock = pygame.time.Clock()
@@ -897,6 +1026,12 @@ dash_w = 0.12
 # --------------------------------------------- #
 # init sprites values
 
+black_image = pygame.Surface((1, 1))
+black_image.fill((0,) * 3)
+
+yellow_image = pygame.Surface((1, 1))
+yellow_image.fill((100, 100, 0))
+
 void_image = pygame.Surface((1, 1), pygame.SRCALPHA, 32).convert_alpha()
 shadow = load_image("shadow.png")
 
@@ -919,17 +1054,24 @@ test_spike_anims = [scale(load_image(f"spikes/spike_{i}.png"), tile_s) for i in 
 coin_image = scale(load_image("coin.png"), (25,) * 2)
 
 spike_image_down = load_image("spike.png")
-spike_image_up = pygame.transform.rotate(spike_image_down, 180)
-spike_image_right = pygame.transform.rotate(spike_image_down, 90)
-spike_image_left = pygame.transform.rotate(spike_image_down, -90)
+spike_image_up = rotate(spike_image_down, 180)
+spike_image_right = rotate(spike_image_down, 90)
+spike_image_left = rotate(spike_image_down, -90)
 
-wall_cave_ground = pygame.transform.scale(load_image("cave_ground.png"), (28, 28))
+wall_cave_ground = scale(load_image("cave_ground.png"), (28, 28))
+
+cannon_image = scale(load_image("cannon.png"), (20, 20))
+bullet_image = load_image("bullet.png")
 
 # --------------------------------------------- #
 # start game
+
+coins_count = 0
 
 DEBUG = False
 
 StartScene().loop()
 
 GameScene().loop()
+
+EndScene().loop()
